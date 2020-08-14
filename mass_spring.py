@@ -1,5 +1,4 @@
 from src.dennet import DENNet
-from src.diffeq import DiffEq
 
 import torch
 import torch.nn as nn
@@ -70,9 +69,9 @@ if __name__ == '__main__':
     trainloader = data.DataLoader(train, batch_size=len(X), shuffle=False)
 
     HamFunc = HNN(nn.Sequential(
-        nn.Linear(2, 64),
+        nn.Linear(2, 50),
         nn.Tanh(),
-        nn.Linear(64, 1))).to(device)
+        nn.Linear(50, 1))).to(device)
 
     model = DENNet(HamFunc).to(device)
 
@@ -81,6 +80,7 @@ if __name__ == '__main__':
     trainer.fit(learn)
 
     X_t = torch.randn(1000, 2).to(device)
+
     # Evaluate the HNN trajectories for 1s
     s_span = torch.linspace(0, 1, 100)
     traj = model.trajectory(X_t, s_span).detach().cpu()
@@ -104,5 +104,4 @@ if __name__ == '__main__':
     ax.set_ylim([P.min(), P.max()])
     ax.set_xlabel(r"$q$")
     ax.set_ylabel(r"$p$")
-    # ax.set_title("Learned Hamiltonian & Vector Field")
     plt.show()
