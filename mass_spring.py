@@ -55,7 +55,9 @@ class Learner(pl.LightningModule):
 if __name__ == '__main__':
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+    # time
     t = torch.linspace(0, 1, 100).reshape(-1, 1)
+
     X = torch.cat([
         torch.sin(2 * np.pi * t),
         torch.cos(2 * np.pi * t)
@@ -70,19 +72,20 @@ if __name__ == '__main__':
     trainloader = data.DataLoader(train, batch_size=len(X), shuffle=False)
 
     HamFunc = HNN(nn.Sequential(
-        nn.Linear(2, 64),
+        nn.Linear(2, 128),
         nn.Tanh(),
-        nn.Linear(64, 1))).to(device)
+        nn.Linear(128, 1))).to(device)
 
     model = DENNet(HamFunc).to(device)
 
     learn = Learner(model)
-    trainer = pl.Trainer(min_epochs=100, max_epochs=100)
+    trainer = pl.Trainer(min_epochs=200, max_epochs=200)
     trainer.fit(learn)
 
     X_t = torch.randn(1000, 2).to(device)
     # Evaluate the HNN trajectories for 1s
     s_span = torch.linspace(0, 1, 100)
+    # This currently isn't used, why?
     traj = model.trajectory(X_t, s_span).detach().cpu()
 
     n_grid = 50
