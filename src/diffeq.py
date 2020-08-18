@@ -12,6 +12,7 @@ class DiffEq(nn.Module):
     def __init__(self, model, order=1):
         super().__init__()
         self.model = model
+        #number of function evals
         self.nfe = 0.
         self.order = order
         self._intloss = None
@@ -20,10 +21,13 @@ class DiffEq(nn.Module):
 
     def forward(self, s, x):
         self.nfe += 1
+
+        # This was needed for bugfix with datatype
         for _, module in self.model.named_modules():
             if hasattr(module, 's'):
                 module.s = s
 
+        # this could be put in the Learner class
         # if-else to handle autograd training with integral loss propagated in x[:, 0]
         if (self._intloss is not None) and (self._sensitivity == 'autograd'):
             x_dyn = x[:, 1:]
