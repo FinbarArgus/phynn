@@ -16,6 +16,7 @@ class DENNet(pl.LightningModule):
 
         super().__init__()
 
+        # have an if for DiffEq of PDEeq
         self.de_function = DiffEq(func, order)
         self.order = order
         self.sensitivity = sensitivity
@@ -33,6 +34,7 @@ class DENNet(pl.LightningModule):
         return x
 
     def forward(self, x: torch.Tensor):
+        # not being used atm
         x = self._prep_odeint(x)
         switcher = {
             'autograd': self._autograd,
