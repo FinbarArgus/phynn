@@ -2,10 +2,9 @@ import torch
 import torch.nn as nn
 
 
-class Time_integrator(nn.Module):
+class TimeIntegrator(nn.Module):
     """
-    A class for integrating in time with a HNN
-
+    A class for integrating in time with a HNN.
     """
 
     def __init__(self, model):
@@ -13,32 +12,45 @@ class Time_integrator(nn.Module):
         self.model = model
 
     def euler_step(self, x0, dt):
+        """
+        Explicit forward Euler time integration method.
+
+        :param x0:
+        :param dt:
+        :return:
+        """
         grads = self.model.forward(x0)
-        x1 = x0 + dt*grads
+        x1 = x0 + dt * grads
         return x1
 
-    def SV_step(self, x0, dt):
+    def sv_step(self, x0, dt):
+        """
+        Stormer-Verlet (SV) (aka leapfrog) time integration scheme.
+
+        :param x0:
+        :param dt:
+        :return:
+        """
         grads0 = self.model.forward(x0)
-        pTemp = x0[:, 1] + dt/2*grads0[:, 1]
-        xTemp = torch.cat([x0[:, 0].unsqueeze(1), pTemp.unsqueeze(1)], 1)
-        gradsTemp = self.model.forward(xTemp)
-        q1 = x0[:, 0] + dt*gradsTemp[:, 0]
-        xTemp2 = torch.cat([q1.unsqueeze(1), pTemp.unsqueeze(1)], 1)
-        gradsTemp2 = self.model.forward(xTemp2)
-        p1 = pTemp + dt/2*gradsTemp2[:, 1]
+        p_temp = x0[:, 1] + dt / 2 * grads0[:, 1]
+        x_temp = torch.cat([x0[:, 0].unsqueeze(1), p_temp.unsqueeze(1)], 1)
+        grads_temp = self.model.forward(x_temp)
+        q1 = x0[:, 0] + dt * grads_temp[:, 0]
+        x_temp2 = torch.cat([q1.unsqueeze(1), p_temp.unsqueeze(1)], 1)
+        grads_temp2 = self.model.forward(x_temp2)
+        p1 = p_temp + dt / 2 * grads_temp2[:, 1]
         return torch.cat([q1.unsqueeze(1), p1.unsqueeze(1)], 1)
 
-    def integrate(self, xInit, tSpan, method='Euler'):
-        xPath = torch.zeros([xInit.shape[0], xInit.shape[1], tSpan.shape[0]]).to(xInit)
-        xPath[:, :, 0] = xInit
-        for count, t in enumerate(tSpan):
+    def integrate(self, x_init, t_span, method='Euler'):
+        x_path = torch.zeros([x_init.shape[0], x_init.shape[1], t_span.shape[0]]).to(x_init)
+        x_path[:, :, 0] = x_init
+        for count, t in enumerate(t_span):
             if count == 0:
                 continue
-            dt = t - tSpan[count-1]
+            dt = t - t_span[count - 1]
             if method == 'Euler':
-                xPath[:, :, count] = self.euler_step(xPath[:, :, count - 1], dt)
+                x_path[:, :, count] = self.euler_step(x_path[:, :, count - 1], dt)
             elif method == 'SV':
-                xPath[:, :, count] = self.SV_step(xPath[:, :, count - 1], dt)
+                x_path[:, :, count] = self.sv_step(x_path[:, :, count - 1], dt)
 
-
-        return xPath
+        return x_path
