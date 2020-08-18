@@ -1,45 +1,16 @@
-from src.dennet import DENNet
-from src.time_integrator import Time_integrator
-
 import torch
 import torch.nn as nn
 import torch.utils.data as data
 
 import pytorch_lightning as pl
+from pytorch_lightning.loggers import TensorBoardLogger
 
-import numpy as np
+
+from maths.dennet import DENNet
+from mechanics.hamiltonian import HNN, HNNSeparable
+from src.time_integrator import TimeIntegrator
+
 import matplotlib.pyplot as plt
-
-
-class HNN(nn.Module):
-    def __init__(self, hamiltonian: nn.Module, dim=1):
-        super().__init__()
-        self.H = hamiltonian
-        self.n = dim
-
-    def forward(self, x):
-        # TODO(Finbar) do I need to include a kwarg for grads=True so i can set it to false when evaluating time step
-        with torch.set_grad_enabled(True):
-            x = x.requires_grad_(True)
-            grad_h = torch.autograd.grad(self.H(x).sum(), x, allow_unused=False, create_graph=True)[0]
-        return torch.cat([grad_h[:, self.n:], -grad_h[:, :self.n]], 1).to(x)
-
-
-class HNN_seperable(nn.Module):
-    def __init__(self, hamiltonian: nn.Module, dim=1):
-        super().__init__()
-        self.H = hamiltonian
-        self.n = dim
-
-    def forward(self, x):
-        # TODO(Finbar) do I need to include a kwarg for grads=True so i can set it to false when evaluating time step
-        with torch.set_grad_enabled(True):
-            x = x.requires_grad_(True)
-            # TODO(Fix below)
-            grad_hq = torch.autograd.grad(self.H(x).sum(), x, allow_unused=False, create_graph=True)[0][:,0].unsqueeze(1)
-            grad_hp = torch.autograd.grad(self.H(x).sum(), x, allow_unused=False, create_graph=True)[0][:,1].unsqueeze(1)
-        return torch.cat([grad_hp, -grad_hq], 1).to(x)
-    #TODO(Finbar) Forward_q and forward_p functions
 
 
 class Learner(pl.LightningModule):
@@ -55,14 +26,15 @@ class Learner(pl.LightningModule):
     def loss(y, y_hat):
         return ((y - y_hat) ** 2).sum()
 
-    def calculate_f(self, x):
+    @staticmethod
+    def calculate_f(x):
         q_dot = x[:, 1].unsqueeze(1)
         p_dot = -x[:, 0].unsqueeze(1)
-        f = torch.cat([x[:, 1].unsqueeze(1), -x[:, 0].unsqueeze(1)], 1).to(x)
+        f = torch.cat([q_dot, p_dot], 1).to(x)
         return f
 
     def training_step(self, batch, batch_idx):
-        x, yNotUsed = batch
+        x = batch[0]
         y_hat = self.model.de_function(0, x)
         # will need to calculate a y here from the equation residual
         y = self.calculate_f(x)
@@ -78,77 +50,82 @@ class Learner(pl.LightningModule):
         return trainloader
 
 
+def basic_hnn():
+    """
+    Simple Hamiltonian network.
+
+    :return:
+    """
+    h = HNN(nn.Sequential(
+        nn.Linear(2, 50),
+        nn.Tanh(),
+        nn.Linear(50, 1))).to(device)
+
+    model = DENNet(h).to(device)
+    learn = Learner(model)
+    logger = TensorBoardLogger('HNN_logs')
+    trainer = pl.Trainer(gpus=1, min_epochs=500, max_epochs=1000, logger=logger)
+    trainer.fit(learn)
+
+    return h, model
+
+
+def separable_hnn():
+    """
+    Separable Hamiltonian network.
+
+    :return:
+    """
+    h_s = HNNSeparable(nn.Sequential(
+        nn.Linear(2, 100),
+        nn.Tanh(),
+        nn.Linear(100, 1))).to(device)
+
+    model = DENNet(h_s).to(device)
+    learn_sep = Learner(model)
+    logger = TensorBoardLogger('separable_logs')
+    trainer_sep = pl.Trainer(min_epochs=500, max_epochs=1000, logger=logger)
+    trainer_sep.fit(learn_sep)
+
+    return h_s, model
+
+
 if __name__ == '__main__':
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    # time
-    # t = torch.linspace(0, 1, 100).reshape(-1, 1)
-    numTrainData = 1000
+    num_train_data = 1000
 
     X = torch.cat([
-        (3*torch.rand(numTrainData) - 1.5).unsqueeze(1),
-        (3*torch.rand(numTrainData) - 1.5).unsqueeze(1)
+        (3 * torch.rand(num_train_data) - 1.5).unsqueeze(1),
+        (3 * torch.rand(num_train_data) - 1.5).unsqueeze(1)
     ], 1).to(device)
 
-    # TODO(Finbar) get rid of this, it is only used as input to TensorDataSet
-    y = torch.cat([
-        2*torch.rand(numTrainData).unsqueeze(1),
-        2*torch.rand(numTrainData).unsqueeze(1)
-    ], 1).to(device)
-    # Wrap in for loop and change inputs to the stepped forward p's and q's
+    # TODO Wrap in for loop and change inputs to the stepped forward p's and q's
 
-    # TODO(Finbar) figure out how to call this without y
-    train = data.TensorDataset(X, y)
+    train = data.TensorDataset(X)
     trainloader = data.DataLoader(train, batch_size=len(X), shuffle=False)
 
-    HamFunc = HNN(nn.Sequential(
-        nn.Linear(2, 50),
-        nn.Tanh(),
-        nn.Linear(50, 1))).to(device)
+    hamiltonian, basic_model = basic_hnn()
+    separable, separable_model = separable_hnn()
 
-    HamFunc_sep = HNN_seperable(nn.Sequential(
-        nn.Linear(2, 50),
-        nn.Tanh(),
-        nn.Linear(50, 1))).to(device)
-
-    model = DENNet(HamFunc).to(device)
-    model_sep = DENNet(HamFunc_sep).to(device)
-
-    # setup train and train HNN
-    learn = Learner(model)
-    trainer = pl.Trainer(min_epochs=1000, max_epochs=1000)
-    #this also takes in trainloader
-    trainer.fit(learn)
-
-    # train seperable Hamiltonian
-    learn_sep = Learner(model_sep)
-    trainer_sep = pl.Trainer(min_epochs=1000, max_epochs=1000)
-    #this also takes in trainloader
-    trainer_sep.fit(learn_sep)
-
-
-    # grads = HamFunc.forward()
-
-    # Wrap to here
-    qInit = torch.linspace(0.2, 1.5, 3)
-    pInit = torch.zeros(qInit.shape)
-    xInit = torch.cat([qInit.unsqueeze(1), pInit.unsqueeze(1)],1).to(device)
-    # xInit2 = torch.randn(4, 2).to(device)
+    q_init = torch.linspace(0.2, 1.5, 3)
+    p_init = torch.zeros(q_init.shape)
+    x_init = torch.cat([q_init.unsqueeze(1), p_init.unsqueeze(1)], 1).to(device)
 
     # Evaluate the HNN trajectories for 1s
-    s_span = torch.linspace(0, 20, 400).to(device)
+    t_span = torch.linspace(0, 20, 400).to(device)
     # calculate trajectory with odeint
     # traj = model.trajectory(xInit, s_span).detach().cpu()
 
     # set up time integrator that uses our HNN
-    timeIntegrator = Time_integrator(HamFunc).to(device)
+    time_integrator = TimeIntegrator(hamiltonian).to(device)
     # calculate trajectory with an euler step
-    traj_HNN_Euler = timeIntegrator.integrate(xInit, s_span, method='Euler').detach().cpu()
+    traj_HNN_Euler = time_integrator.integrate(x_init, t_span, method='Euler').detach().cpu()
 
-    # set up time integrator that uses our seperable HNN
-    timeIntegrator = Time_integrator(HamFunc_sep).to(device)
+    # set up time integrator that uses our separable HNN
+    time_integrator = TimeIntegrator(separable).to(device)
     # calculate trajectory
-    traj_HNN_SV = timeIntegrator.integrate(xInit, s_span, method='SV').detach().cpu()
+    traj_HNN_SV = time_integrator.integrate(x_init, t_span, method='SV').detach().cpu()
 
     n_grid = 50
     x = torch.linspace(-2, 2, n_grid)
@@ -157,8 +134,8 @@ if __name__ == '__main__':
     for i in range(n_grid):
         for j in range(n_grid):
             x = torch.cat([Q[i, j].reshape(1, 1), P[i, j].reshape(1, 1)], 1).to(device)
-            H[i, j] = model.de_function.model.H(x).detach().cpu()
-            O = model.de_function(0, x).detach().cpu()
+            H[i, j] = basic_model.de_function.model.H(x).detach().cpu()
+            O = basic_model.de_function(0, x).detach().cpu()
             U[i, j], V[i, j] = O[0, 0], O[0, 1]
 
     fig = plt.figure(figsize=(8, 8))
@@ -166,7 +143,7 @@ if __name__ == '__main__':
     ax.contourf(Q, P, H, 100, cmap='seismic')
     # ax.streamplot(Q.T.numpy(), P.T.numpy(), U.T.numpy(), V.T.numpy(), color='black')
     # ax.plot(traj[:, 0, 0], traj[:, 0, 1], color='k')
-    for count in range(len(traj_HNN_Euler[:, 0, 0])-1):
+    for count in range(len(traj_HNN_Euler[:, 0, 0]) - 1):
         ax.plot(traj_HNN_Euler[count, 0, :], traj_HNN_Euler[count, 1, :], color='y')
         ax.plot(traj_HNN_SV[count, 0, :], traj_HNN_SV[count, 1, :], color='g')
     # plot last index with a label for legend
