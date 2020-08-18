@@ -6,8 +6,8 @@ import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
 
 
-from maths.dennet import DENNet
-from mechanics.hamiltonian import HNN, HNNSeparable
+from src.maths.dennet import DENNet
+from src.mechanics.hamiltonian import HNN, HNNSeparable
 from src.time_integrator import TimeIntegrator
 
 import matplotlib.pyplot as plt
@@ -112,7 +112,7 @@ if __name__ == '__main__':
     p_init = torch.zeros(q_init.shape)
     x_init = torch.cat([q_init.unsqueeze(1), p_init.unsqueeze(1)], 1).to(device)
 
-    # Evaluate the HNN trajectories for 1s
+    # Evaluate the HNN trajectories for 20s
     t_span = torch.linspace(0, 20, 400).to(device)
     # calculate trajectory with odeint
     # traj = model.trajectory(xInit, s_span).detach().cpu()

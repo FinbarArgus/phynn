@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torchdiffeq
 import pytorch_lightning as pl
-from maths.diffeq import DiffEq
+from src.maths.diffeq import DiffEq
 
 
 class DENNet(pl.LightningModule):
