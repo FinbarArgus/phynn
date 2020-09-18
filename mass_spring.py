@@ -90,42 +90,60 @@ def separable_hnn():
     return h_s, model
 
 
+
 if __name__ == '__main__':
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    num_train_data = 1000
-
-    X = torch.cat([
+    # Training conditions
+    num_train_data = 100
+    num_tSteps_training = 10
+    # Training initial conditions
+    X_sv = torch.cat([
         (3 * torch.rand(num_train_data) - 1.5).unsqueeze(1),
         (3 * torch.rand(num_train_data) - 1.5).unsqueeze(1)
     ], 1).to(device)
+    # X_euler = X_sv
+    # Training time step
+    dt_train = 0.05
 
-    # TODO Wrap in for loop and change inputs to the stepped forward p's and q's
-
-    train = data.TensorDataset(X)
-    trainloader = data.DataLoader(train, batch_size=len(X), shuffle=False)
-
-    hamiltonian, basic_model = basic_hnn()
-    separable, separable_model = separable_hnn()
-
+    # Testing conditions
     q_init = torch.linspace(0.2, 1.5, 3)
     p_init = torch.zeros(q_init.shape)
     x_init = torch.cat([q_init.unsqueeze(1), p_init.unsqueeze(1)], 1).to(device)
+    # Testing time span
+    t_span_test = torch.linspace(0, 20, 400).to(device)
 
-    # Evaluate the HNN trajectories for 20s
-    t_span = torch.linspace(0, 20, 400).to(device)
+
+    # Wrap in for loop and change inputs to the stepped forward p's and q's
+    for tStep in range(num_tSteps_training):
+
+        train = data.TensorDataset(X_sv)
+        trainloader = data.DataLoader(train, batch_size=len(X_sv), shuffle=False)
+
+        # hamiltonian, basic_model = basic_hnn()
+        separable, separable_model = separable_hnn()
+
+        # set up time integrator that uses our HNN
+        # time_integrator_euler = TimeIntegrator(hamiltonian).to(device)
+        time_integrator_sv = TimeIntegrator(separable).to(device)
+
+        # Evaluate the HNN trajectory for 1 step and then reset the initial condition for more training
+        # X = time_integrator_euler.sv_step(X, dt_train)
+        X_sv = time_integrator_sv.sv_step(X_sv, dt_train)
+
+
     # calculate trajectory with odeint
     # traj = model.trajectory(xInit, s_span).detach().cpu()
 
     # set up time integrator that uses our HNN
-    time_integrator = TimeIntegrator(hamiltonian).to(device)
+    # time_integrator_euler = TimeIntegrator(hamiltonian).to(device)
     # calculate trajectory with an euler step
-    traj_HNN_Euler = time_integrator.integrate(x_init, t_span, method='Euler').detach().cpu()
+    # traj_HNN_Euler = time_integrator_euler.integrate(x_init, t_span_test, method='Euler').detach().cpu()
 
     # set up time integrator that uses our separable HNN
-    time_integrator = TimeIntegrator(separable).to(device)
+    time_integrator_sv = TimeIntegrator(separable).to(device)
     # calculate trajectory
-    traj_HNN_SV = time_integrator.integrate(x_init, t_span, method='SV').detach().cpu()
+    traj_HNN_sv = time_integrator_sv.integrate(x_init, t_span_test, method='SV').detach().cpu()
 
     n_grid = 50
     x = torch.linspace(-2, 2, n_grid)
@@ -134,8 +152,8 @@ if __name__ == '__main__':
     for i in range(n_grid):
         for j in range(n_grid):
             x = torch.cat([Q[i, j].reshape(1, 1), P[i, j].reshape(1, 1)], 1).to(device)
-            H[i, j] = basic_model.de_function.model.H(x).detach().cpu()
-            O = basic_model.de_function(0, x).detach().cpu()
+            H[i, j] = separable_model.de_function.model.H(x).detach().cpu()
+            O = separable_model.de_function(0, x).detach().cpu()
             U[i, j], V[i, j] = O[0, 0], O[0, 1]
 
     fig = plt.figure(figsize=(8, 8))
@@ -143,13 +161,13 @@ if __name__ == '__main__':
     ax.contourf(Q, P, H, 100, cmap='seismic')
     # ax.streamplot(Q.T.numpy(), P.T.numpy(), U.T.numpy(), V.T.numpy(), color='black')
     # ax.plot(traj[:, 0, 0], traj[:, 0, 1], color='k')
-    for count in range(len(traj_HNN_Euler[:, 0, 0]) - 1):
-        ax.plot(traj_HNN_Euler[count, 0, :], traj_HNN_Euler[count, 1, :], color='y')
-        ax.plot(traj_HNN_SV[count, 0, :], traj_HNN_SV[count, 1, :], color='g')
+    for count in range(len(traj_HNN_sv[:, 0, 0]) - 1):
+        # ax.plot(traj_HNN_Euler[count, 0, :], traj_HNN_Euler[count, 1, :], color='y')
+        ax.plot(traj_HNN_sv[count, 0, :], traj_HNN_sv[count, 1, :], color='g')
     # plot last index with a label for legend
     count = count + 1
-    ax.plot(traj_HNN_Euler[count, 0, :], traj_HNN_Euler[count, 1, :], color='y', label='Euler')
-    ax.plot(traj_HNN_SV[count, 0, :], traj_HNN_SV[count, 1, :], color='g', label='Stormer-Verlet')
+    # ax.plot(traj_HNN_Euler[count, 0, :], traj_HNN_Euler[count, 1, :], color='y', label='Euler')
+    ax.plot(traj_HNN_sv[count, 0, :], traj_HNN_SV[count, 1, :], color='g', label='Stormer-Verlet')
 
     ax.legend()
     ax.set_xlim([Q.min(), Q.max()])
