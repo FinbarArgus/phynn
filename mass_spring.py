@@ -7,7 +7,7 @@ from pytorch_lightning.loggers import TensorBoardLogger
 
 
 from src.maths.dennet import DENNet
-from src.mechanics.hamiltonian import HNN, HNNSeparable
+from src.mechanics.hamiltonian import HNNMassSpring, HNNMassSpringSeparable
 from src.time_integrator import TimeIntegrator
 
 import matplotlib.pyplot as plt
@@ -21,6 +21,10 @@ class Learner(pl.LightningModule):
 
     def forward(self, x):
         return self.model.de_function(0, x)
+
+    def backward(self, use_amp, loss, optimizer, optimizer_idx):
+        loss.backward(retain_graph=True)
+        return
 
     @staticmethod
     def loss(y, y_hat):
@@ -56,7 +60,7 @@ def basic_hnn():
 
     :return:
     """
-    h = HNN(nn.Sequential(
+    h = HNNMassSpring(nn.Sequential(
         nn.Linear(2, 50),
         nn.Tanh(),
         nn.Linear(50, 1))).to(device)
@@ -64,27 +68,31 @@ def basic_hnn():
     model = DENNet(h).to(device)
     learn = Learner(model)
     logger = TensorBoardLogger('HNN_logs')
-    trainer = pl.Trainer(gpus=1, min_epochs=500, max_epochs=1000, logger=logger)
+    trainer = pl.Trainer(gpus=1, min_epochs=50, max_epochs=300, logger=logger)
     trainer.fit(learn)
 
     return h, model
 
 
-def separable_hnn():
+def separable_hnn(input_h_s=None, input_model=None):
     """
     Separable Hamiltonian network.
 
     :return:
     """
-    h_s = HNNSeparable(nn.Sequential(
-        nn.Linear(2, 100),
-        nn.Tanh(),
-        nn.Linear(100, 1))).to(device)
+    if input_h_s:
+        h_s = input_h_s
+        model = input_model
+    else:
+        h_s = HNNMassSpringSeparable(nn.Sequential(
+            nn.Linear(2, 100),
+            nn.Tanh(),
+            nn.Linear(100, 1))).to(device)
+        model = DENNet(h_s).to(device)
 
-    model = DENNet(h_s).to(device)
     learn_sep = Learner(model)
     logger = TensorBoardLogger('separable_logs')
-    trainer_sep = pl.Trainer(min_epochs=500, max_epochs=1000, logger=logger)
+    trainer_sep = pl.Trainer(min_epochs=50, max_epochs=100, logger=logger)
     trainer_sep.fit(learn_sep)
 
     return h_s, model
@@ -96,7 +104,7 @@ if __name__ == '__main__':
 
     # Training conditions
     num_train_data = 100
-    num_tSteps_training = 10
+    num_tSteps_training = 5
     # Training initial conditions
     X_sv = torch.cat([
         (3 * torch.rand(num_train_data) - 1.5).unsqueeze(1),
@@ -113,7 +121,6 @@ if __name__ == '__main__':
     # Testing time span
     t_span_test = torch.linspace(0, 20, 400).to(device)
 
-
     # Wrap in for loop and change inputs to the stepped forward p's and q's
     for tStep in range(num_tSteps_training):
 
@@ -121,7 +128,11 @@ if __name__ == '__main__':
         trainloader = data.DataLoader(train, batch_size=len(X_sv), shuffle=False)
 
         # hamiltonian, basic_model = basic_hnn()
-        separable, separable_model = separable_hnn()
+        if tStep == 0:
+            separable, separable_model = separable_hnn()
+        else:
+            separable, separable_model = separable_hnn(input_h_s=separable, input_model=separable_model)
+
 
         # set up time integrator that uses our HNN
         # time_integrator_euler = TimeIntegrator(hamiltonian).to(device)
@@ -129,8 +140,7 @@ if __name__ == '__main__':
 
         # Evaluate the HNN trajectory for 1 step and then reset the initial condition for more training
         # X = time_integrator_euler.sv_step(X, dt_train)
-        X_sv = time_integrator_sv.sv_step(X_sv, dt_train)
-
+        X_sv = time_integrator_sv.sv_step(X_sv, dt_train).detach()
 
     # calculate trajectory with odeint
     # traj = model.trajectory(xInit, s_span).detach().cpu()
@@ -167,7 +177,7 @@ if __name__ == '__main__':
     # plot last index with a label for legend
     count = count + 1
     # ax.plot(traj_HNN_Euler[count, 0, :], traj_HNN_Euler[count, 1, :], color='y', label='Euler')
-    ax.plot(traj_HNN_sv[count, 0, :], traj_HNN_SV[count, 1, :], color='g', label='Stormer-Verlet')
+    ax.plot(traj_HNN_sv[count, 0, :], traj_HNN_sv[count, 1, :], color='g', label='Stormer-Verlet')
 
     ax.legend()
     ax.set_xlim([Q.min(), Q.max()])
