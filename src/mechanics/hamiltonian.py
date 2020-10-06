@@ -49,13 +49,15 @@ class HNN1DWaveSeparable(nn.Module):
         with torch.set_grad_enabled(True):
             x = x.requires_grad_(True)
             xCoords_start = 0
+            xCoords_finish= 0
             q_start = self.num_points
+            q_finish= self.num_points
             p_start = 2*self.num_points
+            p_finish= 2*self.num_points
 
-            xCoords = torch.Tensor.narrow(x, 0, xCoords_start, self.num_points)
-            q = torch.Tensor.narrow(x, 0, q_start, self.num_points)
-            p = torch.Tensor.narrow(x, 0, p_start, self.num_points)
-
+            xCoords = x[xCoords_start:xCoords_finish]
+            q = x[q_start:q_finish]
+            p = x[p_start:p_finish]
 
             dH_dq= torch.autograd.grad(self.H(x).sum(), q, allow_unused=False, create_graph=True)[0].unsqueeze(1)
 
