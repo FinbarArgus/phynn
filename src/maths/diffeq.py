@@ -17,7 +17,7 @@ class DiffEq(nn.Module):
         self._sensitivity = None
         self._dxds = None
 
-    def forward(self, s, x):
+    def forward(self, s, x, aa, bb, cc, dd):
         self.nfe += 1
 
         # This was needed for bugfix with datatype
@@ -28,6 +28,6 @@ class DiffEq(nn.Module):
         if self.order > 1:
             None  # TODO
         else:
-            x = self.model(x)
+            x = self.model(x, aa, bb, cc, dd)
         self._dxds = x
         return x
