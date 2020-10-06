@@ -43,7 +43,7 @@ class Learner(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         x = batch[0]
         # Calculate y_hat = (q_dot_hat, p_dot_hat) from the gradient of the HNN
-        y_hat = self.model.de_function(0, x)
+        y_hat = self.model.de_function(0, x, aa, bb, cc, dd)
         # Calculate the y = (q_dot, p_dot) from the governing equations
         y = self.calculate_f(x, self.model.de_function.model.num_points)
         loss = self.loss(y_hat, y)
@@ -56,6 +56,7 @@ class Learner(pl.LightningModule):
     @staticmethod
     def train_dataloader():
         return trainloader
+
 
 def separable_hnn(num_points, input_h_s=None, input_model=None):
     """
@@ -81,7 +82,6 @@ def separable_hnn(num_points, input_h_s=None, input_model=None):
     return h_s, model
 
 
-
 if __name__ == '__main__':
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -90,37 +90,48 @@ if __name__ == '__main__':
     num_train_xCoords = 20
     num_tSteps_training = 5
     # Training initial conditions [q, p, dq/dx, dp/dx, x]
-    x_coord = torch.rand(num_train_xCoords)
-    X_sv = torch.cat([
-        x_coord,
-        np.pi*torch.cos(np.pi*x_coord),
-        torch.zeros(num_train_xCoords),
-        -np.pi**2*torch.sin(np.pi*x_coord),
-        torch.zeros(num_train_xCoords)
-    ]).to(device)
+    x_coord = torch.rand(num_train_xCoords).to(device)
+    aa = np.pi * torch.cos(np.pi * x_coord).to(device)
+    bb = torch.zeros(num_train_xCoords).to(device)
+    cc = -np.pi ** 2 * torch.sin(np.pi * x_coord).to(device)
+    dd = torch.zeros(num_train_xCoords).to(device)
+
+    # X_sv = torch.cat([
+    #     x_coord,
+    #     np.pi*torch.cos(np.pi*x_coord),
+    #     torch.zeros(num_train_xCoords),
+    #     -np.pi**2*torch.sin(np.pi*x_coord),
+    #     torch.zeros(num_train_xCoords)
+    # ]).to(device)
     # X_euler = X_sv
     # Training time step
     dt_train = 0.05
 
     # Testing conditions
     # temporarily test with the same as the training init conditions
-    X_test = torch.cat([
-        x_coord,
-        np.pi*torch.cos(x_coord),
-        torch.zeros(num_train_xCoords),
-        -np.pi**2*torch.sin(x_coord),
-        torch.zeros(num_train_xCoords)
-    ]).to(device)
 
+    # aa_t = x_coord,
+    # np.pi * torch.cos(x_coord),
+    # torch.zeros(num_train_xCoords),
+    # -np.pi ** 2 * torch.sin(x_coord),
+    # torch.zeros(num_train_xCoords)
+    #
+    # X_test = torch.cat([
+    #     x_coord,
+    #     np.pi*torch.cos(x_coord),
+    #     torch.zeros(num_train_xCoords),
+    #     -np.pi**2*torch.sin(x_coord),
+    #     torch.zeros(num_train_xCoords)
+    # ]).to(device)
+    X_test = None
     # Testing time span
     t_span_test = torch.linspace(0, 20, 400).to(device)
-
 
     # Wrap in for loop and change inputs to the stepped forward p's and q's
     for tStep in range(num_tSteps_training):
 
-        train = data.TensorDataset(X_sv)
-        trainloader = data.DataLoader(train, batch_size=len(X_sv), shuffle=False)
+        train = data.TensorDataset(x_coord, aa, bb, cc, dd)
+        trainloader = data.DataLoader(train, batch_size=len(x_coord), shuffle=False)
 
         # hamiltonian, basic_model = basic_hnn()
         if tStep == 0:
@@ -128,7 +139,6 @@ if __name__ == '__main__':
         else:
             separable, separable_model = separable_hnn(num_train_xCoords,
                                                        input_h_s=separable, input_model=separable_model)
-
 
         # set up time integrator that uses our HNN
         # time_integrator_euler = TimeIntegrator(hamiltonian).to(device)
