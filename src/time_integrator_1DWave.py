@@ -23,34 +23,73 @@ class TimeIntegrator(nn.Module):
         x1 = x0 + dt * grads
         return x1
 
-    def sv_step(self, x0, dt):
+    def sv_step(self, x, q_0, p_0, dt):
         """
         Stormer-Verlet (SV) (aka leapfrog) time integration scheme.
 
-        :param x0:
+        :param x_0:
         :param dt:
         :return:
         """
-        grads0 = self.model.forward(x0)
-        p_temp = x0[:, 1] + dt / 2 * grads0[:, 1]
-        x_temp = torch.cat([x0[:, 0].unsqueeze(1), p_temp.unsqueeze(1)], 1)
-        grads_temp = self.model.forward(x_temp)
-        q1 = x0[:, 0] + dt * grads_temp[:, 0]
-        x_temp2 = torch.cat([q1.unsqueeze(1), p_temp.unsqueeze(1)], 1)
-        grads_temp2 = self.model.forward(x_temp2)
-        p1 = p_temp + dt / 2 * grads_temp2[:, 1]
-        return torch.cat([q1.unsqueeze(1), p1.unsqueeze(1)], 1)
+        q_dot_0, p_dot_0 = self.model.forward(x, q_0, p_0)
+        x = x.detach()
+        q_dot_0 = q_dot_0.detach()
+        p_dot_0 = p_dot_0.detach()
+        p_temp = p_0 + dt / 2 * p_dot_0
 
-    def integrate(self, x_init, t_span, method='Euler'):
-        x_path = torch.zeros([x_init.shape[0], x_init.shape[1], t_span.shape[0]]).to(x_init)
-        x_path[:, :, 0] = x_init
+        q_dot_temp, p_dot_temp = self.model.forward(x, q_0, p_temp)
+        x = x.detach()
+        q_dot_temp = q_dot_0.detach()
+        p_dot_temp = p_dot_0.detach()
+        q_1 = q_0 + dt * q_dot_temp
+
+        q_dot_temp2, p_dot_temp2 = self.model.forward(x, q_1, p_temp)
+        p_dot_temp2 = p_dot_temp2.detach()
+        p_1 = p_temp + dt / 2 * p_dot_temp2
+
+        return q_1, p_1
+
+    def sv_step_wgrads(self, x, q_0, p_0, dq_dx_0, dp_dx_0, dt):
+        """
+        Stormer-Verlet (SV) (aka leapfrog) time integration scheme.
+
+        :param x_0:
+        :param dt:
+        :return:
+        """
+        q_dot_0, p_dot_0, dq_dot_dx_0, dp_dot_dx_0 = self.model.forward_wgrads(x, q_0, p_0, dq_dx_0, dp_dx_0)
+        p_temp = p_0 + dt / 2 * p_dot_0
+        dp_dx_temp = dp_dx_0 + dt / 2 * dp_dot_dx_0
+        q_dot_temp, p_dot_temp, dq_dot_dx_temp, dp_dot_dx_temp = self.model.forward_wgrads(x, q_0, p_temp,
+                                                                                         dq_dx_0, dp_dx_temp)
+        q_1 = q_0 + dt * q_dot_temp
+        dq_dx_1 = dq_dx_0 + dt * dq_dot_dx_temp
+        q_dot_temp2, p_dot_temp2, dq_dot_dx_temp2, dp_dot_dx_temp2 = self.model.forward_wgrads(x, q_1, p_temp,
+                                                                                             dq_dx_1, dp_dx_temp)
+        p_1 = p_temp + dt / 2 * p_dot_temp2
+        dp_dx_1 = dp_dx_temp + dt / 2 * dp_dot_dx_temp2
+
+        return q_1, p_1, dq_dx_1, dp_dx_1
+
+    def integrate(self, x_0, q_0, p_0, t_span, method='SV'):
+        q_path = torch.zeros([x_0.shape[0], t_span.shape[0]]).to(x_0)
+        p_path = torch.zeros([x_0.shape[0], t_span.shape[0]]).to(x_0)
+        q_path[:, 0] = q_0
+        p_path[:, 0] = p_0
+        print('integrating for trajectory')
         for count, t in enumerate(t_span):
+            print(count)
             if count == 0:
                 continue
             dt = t - t_span[count - 1]
             if method == 'Euler':
-                x_path[:, :, count] = self.euler_step(x_path[:, :, count - 1], dt)
+                q_path[:, count], p_path[:, count] = self.euler_step(x_0, q_path[:, count - 1],
+                                                                     p_path[:, count - 1], dt)
             elif method == 'SV':
-                x_path[:, :, count] = self.sv_step(x_path[:, :, count - 1], dt)
+                q_path[:, count], p_path[:, count] = self.sv_step(x_0, q_path[:, count - 1],
+                                                                  p_path[:, count - 1], dt)
 
-        return x_path
+        return q_path, p_path
+
+
+

@@ -46,7 +46,6 @@ class HNN1DWaveSeparable(nn.Module):
 
     def forward(self, x, q, p):
         #This function calculates y_hat = (q_dot_hat, p_dot_hat) = (dH_dp_dx, -dH_dq_dx)
-        # x is the vector of all inputs
         with torch.set_grad_enabled(True):
             x = x.requires_grad_(True)
             q = q.requires_grad_(True)
@@ -70,5 +69,39 @@ class HNN1DWaveSeparable(nn.Module):
             dH_dq_dx = torch.stack(dH_dq_dx_list)
             dH_dp_dx = torch.stack(dH_dp_dx_list)
 
-        return torch.cat([dH_dp_dx, -dH_dq_dx], 0).to(x)
+        return dH_dp_dx, -dH_dq_dx
+
+    def forward_wgrads(self, x, q, p, dq_dx, dp_dx):
+        #This function calculates y_hat = (q_dot_hat, p_dot_hat) = (dH_dp_dx, -dH_dq_dx)
+        grads = self.forward(x, q, p)
+        dH_dp_dx = grads[0]
+        dH_dq_dx = -grads[1]
+
+        with torch.set_grad_enabled(True):
+            x = x.requires_grad_(True)
+            q = q.requires_grad_(True)
+            p = p.requires_grad_(True)
+            dq_dx = dq_dx.requires_grad_(True)
+            dp_dx = dp_dx.requires_grad_(True)
+
+            dH_dq_dx_dx_list = []
+            dH_dp_dx_dx_list = []
+
+            for x_idx, (dH_dq_dx_entry, dH_dp_dx_entry) in enumerate(zip(dH_dq_dx, dH_dp_dx)):
+                dH_dq_dx_entry = torch.autograd.grad(dH_dq_dx_entry, x, allow_unused=False, create_graph=True)[0][x_idx]
+                dH_dp_dx_entry = torch.autograd.grad(dH_dp_dx_entry, x, allow_unused=False, create_graph=True)[0][x_idx]
+                dH_dq_dx_dx_list.append(dH_dq_dx_entry)
+                dH_dp_dx_dx_list.append(dH_dp_dx_entry)
+
+            dH_dq_dx_dx = torch.stack(dH_dq_dx_dx_list)
+            dH_dp_dx_dx = torch.stack(dH_dp_dx_dx_list)
+
+        return dH_dp_dx, -dH_dq_dx, dH_dp_dx_dx, -dH_dq_dx_dx
+
+
+
+
+
+
+
 

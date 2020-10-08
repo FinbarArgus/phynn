@@ -12,6 +12,7 @@ from src.mechanics.hamiltonian import HNN1DWaveSeparable
 from src.time_integrator_1DWave import TimeIntegrator
 
 import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
 
 
 class Learner(pl.LightningModule):
@@ -34,8 +35,7 @@ class Learner(pl.LightningModule):
     @staticmethod
     def calculate_f(x, dq_dx, dp_dx):
         # this function calculates f = (q_dot, p_dot) = (dp_dx, -dq_dx)
-        f = torch.cat([dp_dx, -dq_dx], 0).to(x)
-        return f
+        return dp_dx, -dq_dx
 
     def training_step(self, batch, batch_idx):
         x = batch[0]
@@ -44,9 +44,16 @@ class Learner(pl.LightningModule):
         dq_dx = batch[3]
         dp_dx = batch[4]
         # Calculate y_hat = (q_dot_hat, p_dot_hat) from the gradient of the HNN
-        y_hat = self.model.de_function(0, x, q, p)
+        q_dot_hat, p_dot_hat = self.model.de_function(0, x, q, p)
+        y_hat = torch.cat([q_dot_hat, p_dot_hat])
         # Calculate the y = (q_dot, p_dot) from the governing equations
-        y = self.calculate_f(x, dq_dx, dp_dx)
+        q_dot, p_dot = self.calculate_f(x, dq_dx, dp_dx)
+        # set the boundary q_dot and p_dot to zero
+        # TODO create an apply_boundary_conditions function
+        p_dot[0] = 0
+        p_dot[-1] = 0
+
+        y = torch.cat([q_dot, p_dot])
         loss = self.loss(y_hat, y)
         logs = {'train_loss': loss}
         return {'loss': loss, 'log': logs}
@@ -70,14 +77,14 @@ def separable_hnn(num_points, input_h_s=None, input_model=None):
         model = input_model
     else:
         h_s = HNN1DWaveSeparable(nn.Sequential(
-            nn.Linear(3*num_points, 100),
+            nn.Linear(3*num_points, 50),
             nn.Tanh(),
-            nn.Linear(100, 1)), num_points).to(device)
+            nn.Linear(50, 1)), num_points).to(device)
         model = DENNet(h_s).to(device)
 
     learn_sep = Learner(model)
     logger = TensorBoardLogger('separable_logs')
-    trainer_sep = pl.Trainer(min_epochs=50, max_epochs=300, logger=logger)
+    trainer_sep = pl.Trainer(min_epochs=200, max_epochs=150, logger=logger)
     trainer_sep.fit(learn_sep)
 
     return h_s, model
@@ -88,10 +95,12 @@ if __name__ == '__main__':
 
     # Training conditions
     num_train_samples = 1
-    num_train_xCoords = 20
-    num_tSteps_training = 5
+    num_train_xCoords = 10
+    num_tSteps_training = 20
     # Training initial conditions [q, p, dq/dx, dp/dx, x]
-    x_coord = torch.rand(num_train_xCoords).to(device)
+    x_coord = torch.zeros(num_train_xCoords).to(device)
+    x_coord[1:-1] = torch.rand(num_train_xCoords-2).sort()[0]
+    x_coord[-1] = 1.0
     q = np.pi * torch.cos(np.pi * x_coord).to(device)
     p = torch.zeros(num_train_xCoords).to(device)
     dq_dx = -np.pi ** 2 * torch.sin(np.pi * x_coord).to(device)
@@ -110,13 +119,14 @@ if __name__ == '__main__':
 
     # Testing conditions
     # temporarily test with the same as the training init conditions
-    x_coord_test = torch.rand(num_train_xCoords).to(device)
+    x_coord_test = x_coord
+    #x_coord_test = torch.rand(num_train_xCoords).to(device)
     q_test = np.pi * torch.cos(np.pi * x_coord).to(device)
     p_test = torch.zeros(num_train_xCoords).to(device)
     dq_dx_test = -np.pi ** 2 * torch.sin(np.pi * x_coord).to(device)
     dp_dx_test = torch.zeros(num_train_xCoords).to(device)
     # Testing time span
-    t_span_test = torch.linspace(0, 20, 400).to(device)
+    t_span_test = torch.linspace(0, 1, 20).to(device)
 
     # Wrap in for loop and change inputs to the stepped forward p's and q's
     for tStep in range(num_tSteps_training):
@@ -136,8 +146,14 @@ if __name__ == '__main__':
         time_integrator_sv = TimeIntegrator(separable).to(device)
 
         # Evaluate the HNN trajectory for 1 step and then reset the initial condition for more training
-        q, p, dq_dx, dp_dx = time_integrator_sv.sv_step(q, p, dq_dx, dp_dx, dt_train).detach()
+        # q, p = time_integrator_sv.sv_step(x_coord, q, p, dt_train)
+        q, p, dq_dx, dp_dx = time_integrator_sv.sv_step_wgrads(x_coord, q, p, dq_dx, dp_dx, dt_train)
+        q = q.detach()
+        p = p.detach()
+        dq_dx = dq_dx.detach()
+        dp_dx = dp_dx.detach()
 
+    print('model finished training')
 
     # calculate trajectory with odeint
     # traj = model.trajectory(xInit, s_span).detach().cpu()
@@ -150,16 +166,30 @@ if __name__ == '__main__':
     # set up time integrator that uses our separable HNN
     time_integrator_sv = TimeIntegrator(separable).to(device)
     # calculate trajectory
-    traj_HNN_sv = time_integrator_sv.integrate(X_test, t_span_test, method='SV').detach().cpu()
+    q_traj, p_traj = time_integrator_sv.integrate(x_coord_test, q_test, p_test,
+                                                  t_span_test, method='SV')
+    x_coord_test = x_coord_test.detach().cpu()
+    q_traj = q_traj.detach().cpu()
+    p_traj = p_traj.detach().cpu()
 
     fig = plt.figure(figsize=(8, 8))
-    ax = fig.add_subplot(111)
 
-    for count in range(len(traj_HNN_sv[:, 0, 0]) - 1):
-        ax.plot(traj_HNN_sv[count, 0, :], traj_HNN_sv[count, 1, :], color='g')
-        # ax.legend()
-        # ax.set_xlim([Q.min(), Q.max()])
-        # ax.set_ylim([P.min(), P.max()])
-        ax.set_xlabel(r"$x$")
-        ax.set_ylabel(r"$p$")
-        plt.show()
+    ax = plt.axes(xlim=(0, 1), ylim=(-2, 2))
+    line, = ax.plot([], [], lw=3)
+
+    def init():
+        line.set_data([], [])
+        return line,
+
+
+    def animate(i):
+        line.set_data(x_coord_test, p_traj[:, i])
+        return line,
+
+
+    anim = FuncAnimation(fig, animate, init_func=init, blit=True)
+    plt.show()
+    #anim.save('test_anim.gif', writer='ffmpeg')
+
+
+
