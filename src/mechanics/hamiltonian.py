@@ -44,7 +44,7 @@ class HNN1DWaveSeparable(nn.Module):
         self.n = dim
         self.num_points = num_points
 
-    def forward(self, x, q, p):
+    def forward(self, x, q, p, detach=False):
         #This function calculates y_hat = (q_dot_hat, p_dot_hat) = (dH_dp_dx, -dH_dq_dx)
         with torch.set_grad_enabled(True):
             x = x.requires_grad_(True)
@@ -66,14 +66,18 @@ class HNN1DWaveSeparable(nn.Module):
                 dH_dq_dx_list.append(dH_dq_dx_entry)
                 dH_dp_dx_list.append(dH_dp_dx_entry)
 
-            dH_dq_dx = torch.stack(dH_dq_dx_list)
-            dH_dp_dx = torch.stack(dH_dp_dx_list)
+            if detach:
+                dH_dq_dx = torch.stack(dH_dq_dx_list).detach()
+                dH_dp_dx = torch.stack(dH_dp_dx_list).detach()
+            else:
+                dH_dq_dx = torch.stack(dH_dq_dx_list)
+                dH_dp_dx = torch.stack(dH_dp_dx_list)
 
         return dH_dp_dx, -dH_dq_dx
 
     def forward_wgrads(self, x, q, p, dq_dx, dp_dx):
         #This function calculates y_hat = (q_dot_hat, p_dot_hat) = (dH_dp_dx, -dH_dq_dx)
-        grads = self.forward(x, q, p)
+        grads = self.forward(x, q, p, detach=False)
         dH_dp_dx = grads[0]
         dH_dq_dx = -grads[1]
 
@@ -96,7 +100,7 @@ class HNN1DWaveSeparable(nn.Module):
             dH_dq_dx_dx = torch.stack(dH_dq_dx_dx_list)
             dH_dp_dx_dx = torch.stack(dH_dp_dx_dx_list)
 
-        return dH_dp_dx, -dH_dq_dx, dH_dp_dx_dx, -dH_dq_dx_dx
+        return dH_dp_dx.detach(), -dH_dq_dx.detach(), dH_dp_dx_dx.detach(), -dH_dq_dx_dx.detach()
 
 
 

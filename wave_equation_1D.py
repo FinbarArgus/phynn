@@ -77,14 +77,14 @@ def separable_hnn(num_points, input_h_s=None, input_model=None):
         model = input_model
     else:
         h_s = HNN1DWaveSeparable(nn.Sequential(
-            nn.Linear(3*num_points, 50),
+            nn.Linear(3*num_points, 256),
             nn.Tanh(),
-            nn.Linear(50, 1)), num_points).to(device)
+            nn.Linear(256, 1)), num_points).to(device)
         model = DENNet(h_s).to(device)
 
     learn_sep = Learner(model)
     logger = TensorBoardLogger('separable_logs')
-    trainer_sep = pl.Trainer(min_epochs=200, max_epochs=150, logger=logger)
+    trainer_sep = pl.Trainer(min_epochs=400, max_epochs=400, logger=logger)
     trainer_sep.fit(learn_sep)
 
     return h_s, model
@@ -95,8 +95,8 @@ if __name__ == '__main__':
 
     # Training conditions
     num_train_samples = 1
-    num_train_xCoords = 10
-    num_tSteps_training = 20
+    num_train_xCoords = 20
+    num_tSteps_training = 400
     # Training initial conditions [q, p, dq/dx, dp/dx, x]
     x_coord = torch.zeros(num_train_xCoords).to(device)
     x_coord[1:-1] = torch.rand(num_train_xCoords-2).sort()[0]
@@ -115,7 +115,7 @@ if __name__ == '__main__':
     # ]).to(device)
     # X_euler = X_sv
     # Training time step
-    dt_train = 0.05
+    dt_train = 0.01
 
     # Testing conditions
     # temporarily test with the same as the training init conditions
@@ -126,7 +126,7 @@ if __name__ == '__main__':
     dq_dx_test = -np.pi ** 2 * torch.sin(np.pi * x_coord).to(device)
     dp_dx_test = torch.zeros(num_train_xCoords).to(device)
     # Testing time span
-    t_span_test = torch.linspace(0, 1, 20).to(device)
+    t_span_test = torch.linspace(0, 4, 400).to(device)
 
     # Wrap in for loop and change inputs to the stepped forward p's and q's
     for tStep in range(num_tSteps_training):
@@ -187,7 +187,7 @@ if __name__ == '__main__':
         return line,
 
 
-    anim = FuncAnimation(fig, animate, init_func=init, blit=True)
+    anim = FuncAnimation(fig, animate, frames=len(t_span_test), init_func=init, blit=True)
     plt.show()
     #anim.save('test_anim.gif', writer='ffmpeg')
 

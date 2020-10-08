@@ -31,20 +31,25 @@ class TimeIntegrator(nn.Module):
         :param dt:
         :return:
         """
-        q_dot_0, p_dot_0 = self.model.forward(x, q_0, p_0)
+        q_dot_0, p_dot_0 = self.model.forward(x, q_0, p_0, detach=True)
         x = x.detach()
-        q_dot_0 = q_dot_0.detach()
-        p_dot_0 = p_dot_0.detach()
+        q_0 = q_0.detach()
+        p_0 = p_0.detach()
+
         p_temp = p_0 + dt / 2 * p_dot_0
 
-        q_dot_temp, p_dot_temp = self.model.forward(x, q_0, p_temp)
+        q_dot_temp, p_dot_temp = self.model.forward(x, q_0, p_temp, detach=True)
         x = x.detach()
-        q_dot_temp = q_dot_0.detach()
-        p_dot_temp = p_dot_0.detach()
+        q_0 = q_0.detach()
+        p_temp = p_temp.detach()
+
         q_1 = q_0 + dt * q_dot_temp
 
-        q_dot_temp2, p_dot_temp2 = self.model.forward(x, q_1, p_temp)
-        p_dot_temp2 = p_dot_temp2.detach()
+        q_dot_temp2, p_dot_temp2 = self.model.forward(x, q_1, p_temp, detach=True)
+        # x = x.detach()
+        q_1 = q_1.detach()
+        p_temp = p_temp.detach()
+
         p_1 = p_temp + dt / 2 * p_dot_temp2
 
         return q_1, p_1
@@ -58,14 +63,32 @@ class TimeIntegrator(nn.Module):
         :return:
         """
         q_dot_0, p_dot_0, dq_dot_dx_0, dp_dot_dx_0 = self.model.forward_wgrads(x, q_0, p_0, dq_dx_0, dp_dx_0)
+        x = x.detach()
+        q_0 = q_0.detach()
+        p_0 = p_0.detach()
+        dq_dx_0 = dq_dx_0.detach()
+        dp_dx_0 = dp_dx_0.detach()
+
         p_temp = p_0 + dt / 2 * p_dot_0
         dp_dx_temp = dp_dx_0 + dt / 2 * dp_dot_dx_0
         q_dot_temp, p_dot_temp, dq_dot_dx_temp, dp_dot_dx_temp = self.model.forward_wgrads(x, q_0, p_temp,
                                                                                          dq_dx_0, dp_dx_temp)
+        x = x.detach()
+        q_0 = q_0.detach()
+        p_temp = p_temp.detach()
+        dq_dx_0 = dq_dx_0.detach()
+        dp_dx_temp = dp_dx_temp.detach()
+
         q_1 = q_0 + dt * q_dot_temp
         dq_dx_1 = dq_dx_0 + dt * dq_dot_dx_temp
         q_dot_temp2, p_dot_temp2, dq_dot_dx_temp2, dp_dot_dx_temp2 = self.model.forward_wgrads(x, q_1, p_temp,
                                                                                              dq_dx_1, dp_dx_temp)
+        # x = x.detach()
+        q_1 = q_1.detach()
+        p_temp = p_temp.detach()
+        dq_dx_1 = dq_dx_1.detach()
+        dp_dx_temp = dp_dx_temp.detach()
+
         p_1 = p_temp + dt / 2 * p_dot_temp2
         dp_dx_1 = dp_dx_temp + dt / 2 * dp_dot_dx_temp2
 
