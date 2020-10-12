@@ -9,6 +9,7 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from src.maths.dennet import DENNet
 from src.mechanics.hamiltonian import HNNMassSpring, HNNMassSpringSeparable
 from src.time_integrator import TimeIntegrator
+from src.utils.activation import Siren
 
 import matplotlib.pyplot as plt
 
@@ -52,6 +53,30 @@ class Learner(pl.LightningModule):
     @staticmethod
     def train_dataloader():
         return trainloader
+
+
+class SirenNet(nn.Module):
+    def __init__(self, dim_in, dim_hidden, dim_out, num_layers, w0=30., w0_initial=30.):
+        super().__init__()
+        layers = list()
+        for ind in range(num_layers):
+            is_first = ind == 0
+            layer_w0 = w0_initial if is_first else w0
+            layer_dim_in = dim_in if is_first else dim_hidden
+
+            layers.append(Siren(
+                dim_in=layer_dim_in,
+                dim_out=dim_hidden,
+                w0=layer_w0,
+                is_first=is_first
+            ))
+
+        self.net = nn.Sequential(*layers)
+        self.last_layer = nn.Linear(dim_hidden, dim_out)
+
+    def forward(self, x):
+        x = self.net(x)
+        return self.last_layer(x)
 
 
 def basic_hnn():
