@@ -44,53 +44,68 @@ class HNN1DWaveSeparable(nn.Module):
         self.n = dim
         self.num_points = num_points
 
-    def forward(self, x, aa, bb, cc, dd):
+    def forward(self, x, q, p, detach=False):
         #This function calculates y_hat = (q_dot_hat, p_dot_hat) = (dH_dp_dx, -dH_dq_dx)
-        # x is the vector of all inputs
         with torch.set_grad_enabled(True):
             x = x.requires_grad_(True)
-            aa = aa.requires_grad_(True)
-            xCoords_start = 0
-            q_start = self.num_points
-            p_start = 2*self.num_points
+            q = q.requires_grad_(True)
+            p = p.requires_grad_(True)
 
-            # xCoords = torch.Tensor.narrow(x, 0, xCoords_start, self.num_points)
-            # q = torch.Tensor.narrow(x, 0, q_start, self.num_points)
-            # p = torch.Tensor.narrow(x, 0, p_start, self.num_points)
+            dH_dq = torch.autograd.grad(self.H(torch.cat([x, q, p])).sum(), q, allow_unused=False,
+                                        create_graph=True)[0].unsqueeze(1)
+            dH_dp = torch.autograd.grad(self.H(torch.cat([x, q, p])).sum(), p, allow_unused=False,
+                                        create_graph=True)[0].unsqueeze(1)
 
-            dH_dq = torch.autograd.grad(self.H(torch.cat([x, aa, bb, cc, dd])).sum(), x, allow_unused=False, create_graph=True)[0].unsqueeze(1)
-            dH_dqa = torch.autograd.grad(self.H(torch.cat([x, aa, bb, cc, dd])).sum(), aa, allow_unused=False, create_graph=True)[0].unsqueeze(1)
+            dH_dq_dx_list = []
+            dH_dp_dx_list = []
 
-            #dH_dq = torch.Tensor.narrow(dH_dinp, 0, q_start, self.num_points)
-            #dH_dp = torch.Tensor.narrow(dH_dinp, 0, p_start, self.num_points)
+            # loop through dH_dq and dH_dp entries and get the derivative of each one wrt to the corresponding x_idx
+            for x_idx, (dH_dq_entry, dH_dp_entry) in enumerate(zip(dH_dq, dH_dp)):
+                dH_dq_dx_entry = torch.autograd.grad(dH_dq_entry, x, allow_unused=False, create_graph=True)[0][x_idx]
+                dH_dp_dx_entry = torch.autograd.grad(dH_dp_entry, x, allow_unused=False, create_graph=True)[0][x_idx]
+                dH_dq_dx_list.append(dH_dq_dx_entry)
+                dH_dp_dx_list.append(dH_dp_dx_entry)
 
-            #dH_dq_dinp = torch.autograd.grad(dH_dq, x, allow_unused=False, create_graph=True)[0].unsqueeze(1)
-            #dH_dp_dinp = torch.autograd.grad(dH_dp, x, allow_unused=False, create_graph=True)[0].unsqueeze(1)
+            if detach:
+                dH_dq_dx = torch.stack(dH_dq_dx_list).detach()
+                dH_dp_dx = torch.stack(dH_dp_dx_list).detach()
+            else:
+                dH_dq_dx = torch.stack(dH_dq_dx_list)
+                dH_dp_dx = torch.stack(dH_dp_dx_list)
 
-            #dH_dq_dx = dH_dq_dinp[xCoords_idx]
-            #dH_dp_dx = dH_dp_dinp[xCoords_idx]
+        return dH_dp_dx, -dH_dq_dx
 
-            # dH_dq_dx_list = []
-            # dH_dp_dx_list = []
-            #
-            # # This doesn't work
-            # for dH_dq_entry, dH_dp_entry, x_entry in zip(dH_dq, dH_dp, x[xCoords_idx]):
-            #     dH_dq_dx_entry = torch.autograd.grad(dH_dq_entry, x_entry, allow_unused=False, create_graph=True)[0]
-            #     dH_dp_dx_entry = torch.autograd.grad(dH_dp_entry, x_entry, allow_unused=False, create_graph=True)[0]
-            #     dH_dq_dx_list.append(dH_dq_dx_entry)
-            #     dH_dp_dx_list.append(dH_dp_dx_entry)
-            #
-            # # This works but is not efficient
-            # for x_idx, (dH_dq_entry, dH_dp_entry) in enumerate(zip(dH_dq, dH_dp)):
-            #     dH_dq_dx_entry = torch.autograd.grad(dH_dq_entry, x, allow_unused=False, create_graph=True)[0][x_idx]
-            #     dH_dp_dx_entry = torch.autograd.grad(dH_dp_entry, x, allow_unused=False, create_graph=True)[0][x_idx]
-            #     dH_dq_dx_list.append(dH_dq_dx_entry)
-            #     dH_dp_dx_list.append(dH_dp_dx_entry)
-            #
-            # dH_dq_dx = torch.stack(dH_dq_dx_list)
-            # dH_dp_dx = torch.stack(dH_dp_dx_list)
+    def forward_wgrads(self, x, q, p, dq_dx, dp_dx):
+        #This function calculates y_hat = (q_dot_hat, p_dot_hat) = (dH_dp_dx, -dH_dq_dx)
+        grads = self.forward(x, q, p, detach=False)
+        dH_dp_dx = grads[0]
+        dH_dq_dx = -grads[1]
 
-        # return torch.cat([dH_dp_dx, -dH_dq_dx], 0).to(x)
-        return torch.cat([dH_dq], 0).to(x)
+        with torch.set_grad_enabled(True):
+            x = x.requires_grad_(True)
+            q = q.requires_grad_(True)
+            p = p.requires_grad_(True)
+            dq_dx = dq_dx.requires_grad_(True)
+            dp_dx = dp_dx.requires_grad_(True)
 
-    # TODO (Finbar) Forward_q and forward_p functions
+            dH_dq_dx_dx_list = []
+            dH_dp_dx_dx_list = []
+
+            for x_idx, (dH_dq_dx_entry, dH_dp_dx_entry) in enumerate(zip(dH_dq_dx, dH_dp_dx)):
+                dH_dq_dx_entry = torch.autograd.grad(dH_dq_dx_entry, x, allow_unused=False, create_graph=True)[0][x_idx]
+                dH_dp_dx_entry = torch.autograd.grad(dH_dp_dx_entry, x, allow_unused=False, create_graph=True)[0][x_idx]
+                dH_dq_dx_dx_list.append(dH_dq_dx_entry)
+                dH_dp_dx_dx_list.append(dH_dp_dx_entry)
+
+            dH_dq_dx_dx = torch.stack(dH_dq_dx_dx_list)
+            dH_dp_dx_dx = torch.stack(dH_dp_dx_dx_list)
+
+        return dH_dp_dx.detach(), -dH_dq_dx.detach(), dH_dp_dx_dx.detach(), -dH_dq_dx_dx.detach()
+
+
+
+
+
+
+
+

@@ -1,7 +1,7 @@
 import torch.nn as nn
 
 
-class DiffEq(nn.Module):
+class DiffEq_1DWave(nn.Module):
     """
     A wrapper for differential equations. Currently this class supports only DEs of order 1.
 
@@ -17,7 +17,7 @@ class DiffEq(nn.Module):
         self._sensitivity = None
         self._dxds = None
 
-    def forward(self, s, x):
+    def forward(self, s, x, q, p):
         self.nfe += 1
 
         # This was needed for bugfix with datatype
@@ -28,6 +28,6 @@ class DiffEq(nn.Module):
         if self.order > 1:
             None  # TODO
         else:
-            x = self.model(x)
+            x = self.model(x, q, p)
         self._dxds = x
         return x
