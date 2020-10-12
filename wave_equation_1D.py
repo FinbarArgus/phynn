@@ -38,11 +38,11 @@ class Learner(pl.LightningModule):
         return dp_dx, -dq_dx
 
     def training_step(self, batch, batch_idx):
-        x = batch[0]
-        q = batch[1]
-        p = batch[2]
-        dq_dx = batch[3]
-        dp_dx = batch[4]
+        x = batch[0][0]
+        q = batch[1][0]
+        p = batch[2][0]
+        dq_dx = batch[3][0]
+        dp_dx = batch[4][0]
         # Calculate y_hat = (q_dot_hat, p_dot_hat) from the gradient of the HNN
         q_dot_hat, p_dot_hat = self.model.de_function(0, x, q, p)
         y_hat = torch.cat([q_dot_hat, p_dot_hat])
@@ -59,7 +59,7 @@ class Learner(pl.LightningModule):
         return {'loss': loss, 'log': logs}
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.model.parameters(), lr=0.01)
+        return torch.optim.Adam(self.model.parameters(), lr=0.001)
 
     @staticmethod
     def train_dataloader():
@@ -77,14 +77,16 @@ def separable_hnn(num_points, input_h_s=None, input_model=None):
         model = input_model
     else:
         h_s = HNN1DWaveSeparable(nn.Sequential(
-            nn.Linear(3*num_points, 256),
+            nn.Linear(3*num_points, 30),
             nn.Tanh(),
-            nn.Linear(256, 1)), num_points).to(device)
-        model = DENNet(h_s).to(device)
+            nn.Linear(30, 30),
+            nn.Tanh(),
+            nn.Linear(30, 1)), num_points).to(device)
+        model = DENNet(h_s, case='wave').to(device)
 
     learn_sep = Learner(model)
     logger = TensorBoardLogger('separable_logs')
-    trainer_sep = pl.Trainer(min_epochs=400, max_epochs=400, logger=logger)
+    trainer_sep = pl.Trainer(min_epochs=300, max_epochs=300, logger=logger)
     trainer_sep.fit(learn_sep)
 
     return h_s, model
@@ -96,15 +98,23 @@ if __name__ == '__main__':
     # Training conditions
     num_train_samples = 1
     num_train_xCoords = 20
-    num_tSteps_training = 400
+    num_tSteps_training = 1
+    num_batches = 30
     # Training initial conditions [q, p, dq/dx, dp/dx, x]
-    x_coord = torch.zeros(num_train_xCoords).to(device)
-    x_coord[1:-1] = torch.rand(num_train_xCoords-2).sort()[0]
-    x_coord[-1] = 1.0
-    q = np.pi * torch.cos(np.pi * x_coord).to(device)
-    p = torch.zeros(num_train_xCoords).to(device)
-    dq_dx = -np.pi ** 2 * torch.sin(np.pi * x_coord).to(device)
-    dp_dx = torch.zeros(num_train_xCoords).to(device)
+    x_coord = torch.zeros(num_batches, num_train_xCoords).to(device)
+    x_coord[:, 1:-1] = torch.rand(num_batches, num_train_xCoords-2).sort()[0]
+    x_coord[:, -1] = 1.0
+    q = torch.zeros(num_batches, num_train_xCoords).to(device)
+    p = torch.zeros(num_batches, num_train_xCoords).to(device)
+    dq_dx = torch.zeros(num_batches, num_train_xCoords).to(device)
+    dp_dx = torch.zeros(num_batches, num_train_xCoords).to(device)
+    for batch_idx in range(num_batches):
+        amplitude_q = 2*np.random.rand(1)[0]-1
+        # amplitude_p = 2*np.random.rand(1)[0]-1
+        q[batch_idx, :] = amplitude_q*np.pi * torch.cos(np.pi * x_coord[batch_idx, :]).to(device)
+        # p[batch_idx, :] = amplitude_p*np.pi * torch.sin(np.pi * x_coord).to(device)
+        dq_dx[batch_idx, :] = -amplitude_q*np.pi ** 2 * torch.sin(np.pi * x_coord[batch_idx, :]).to(device)
+        # dq_dx[batch_idx, :] = amplitude_p*np.pi ** 2 * torch.cos(np.pi * x_coord).to(device)
 
     # X_sv = torch.cat([
     #     x_coord,
@@ -118,12 +128,12 @@ if __name__ == '__main__':
     dt_train = 0.01
 
     # Testing conditions
-    # temporarily test with the same as the training init conditions
-    x_coord_test = x_coord
+    # temporarily test with the same as one of the training init conditions
+    x_coord_test = x_coord[0, :]
     #x_coord_test = torch.rand(num_train_xCoords).to(device)
-    q_test = np.pi * torch.cos(np.pi * x_coord).to(device)
+    q_test = np.pi * torch.cos(np.pi * x_coord_test).to(device)
     p_test = torch.zeros(num_train_xCoords).to(device)
-    dq_dx_test = -np.pi ** 2 * torch.sin(np.pi * x_coord).to(device)
+    dq_dx_test = -np.pi ** 2 * torch.sin(np.pi * x_coord_test).to(device)
     dp_dx_test = torch.zeros(num_train_xCoords).to(device)
     # Testing time span
     t_span_test = torch.linspace(0, 4, 400).to(device)
@@ -132,7 +142,7 @@ if __name__ == '__main__':
     for tStep in range(num_tSteps_training):
 
         train = data.TensorDataset(x_coord, q, p, dq_dx, dp_dx)
-        trainloader = data.DataLoader(train, batch_size=len(x_coord), shuffle=False)
+        trainloader = data.DataLoader(train, batch_size=1, shuffle=True)
 
         # hamiltonian, basic_model = basic_hnn()
         if tStep == 0:
@@ -143,15 +153,15 @@ if __name__ == '__main__':
 
         # set up time integrator that uses our HNN
         # time_integrator_euler = TimeIntegrator(hamiltonian).to(device)
-        time_integrator_sv = TimeIntegrator(separable).to(device)
+        # time_integrator_sv = TimeIntegrator(separable).to(device)
 
         # Evaluate the HNN trajectory for 1 step and then reset the initial condition for more training
-        # q, p = time_integrator_sv.sv_step(x_coord, q, p, dt_train)
-        q, p, dq_dx, dp_dx = time_integrator_sv.sv_step_wgrads(x_coord, q, p, dq_dx, dp_dx, dt_train)
-        q = q.detach()
-        p = p.detach()
-        dq_dx = dq_dx.detach()
-        dp_dx = dp_dx.detach()
+        # # # # q, p = time_integrator_sv.sv_step(x_coord, q, p, dt_train)
+        # q, p, dq_dx, dp_dx = time_integrator_sv.sv_step_wgrads(x_coord, q, p, dq_dx, dp_dx, dt_train)
+        # q = q.detach()
+        # p = p.detach()
+        # dq_dx = dq_dx.detach()
+        # dp_dx = dp_dx.detach()
 
     print('model finished training')
 
@@ -183,7 +193,7 @@ if __name__ == '__main__':
 
 
     def animate(i):
-        line.set_data(x_coord_test, p_traj[:, i])
+        line.set_data(x_coord_test, q_traj[:, i])
         return line,
 
 

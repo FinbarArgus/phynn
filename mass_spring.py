@@ -65,7 +65,7 @@ def basic_hnn():
         nn.Tanh(),
         nn.Linear(50, 1))).to(device)
 
-    model = DENNet(h).to(device)
+    model = DENNet(h, case='springmass').to(device)
     learn = Learner(model)
     logger = TensorBoardLogger('HNN_logs')
     trainer = pl.Trainer(gpus=1, min_epochs=50, max_epochs=300, logger=logger)
@@ -88,7 +88,7 @@ def separable_hnn(input_h_s=None, input_model=None):
             nn.Linear(2, 100),
             nn.Tanh(),
             nn.Linear(100, 1))).to(device)
-        model = DENNet(h_s).to(device)
+        model = DENNet(h_s, case='springmass').to(device)
 
     learn_sep = Learner(model)
     logger = TensorBoardLogger('separable_logs')
