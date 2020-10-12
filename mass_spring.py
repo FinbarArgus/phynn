@@ -186,22 +186,9 @@ if __name__ == '__main__':
         else:
             separable, separable_model = separable_hnn_siren(input_h_s=separable, input_model=separable_model)
 
-
-        # set up time integrator that uses our HNN
-        # time_integrator_euler = TimeIntegrator(hamiltonian).to(device)
         time_integrator_sv = TimeIntegrator(separable).to(device)
 
-        # Evaluate the HNN trajectory for 1 step and then reset the initial condition for more training
-        # X = time_integrator_euler.sv_step(X, dt_train)
         X_sv = time_integrator_sv.sv_step(X_sv, dt_train).detach()
-
-    # calculate trajectory with odeint
-    # traj = model.trajectory(xInit, s_span).detach().cpu()
-
-    # set up time integrator that uses our HNN
-    # time_integrator_euler = TimeIntegrator(hamiltonian).to(device)
-    # calculate trajectory with an euler step
-    # traj_HNN_Euler = time_integrator_euler.integrate(x_init, t_span_test, method='Euler').detach().cpu()
 
     # set up time integrator that uses our separable HNN
     time_integrator_sv = TimeIntegrator(separable).to(device)
