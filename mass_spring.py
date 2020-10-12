@@ -123,6 +123,35 @@ def separable_hnn(input_h_s=None, input_model=None):
     return h_s, model
 
 
+def separable_hnn_siren(input_h_s=None, input_model=None):
+    """
+    Separable Hamiltonian network using Siren network.
+
+    :return:
+    """
+    if input_h_s:
+        h_s = input_h_s
+        model = input_model
+    else:
+        network = SirenNet(
+            dim_in=2,
+            dim_hidden=100,
+            dim_out=1,
+            num_layers=5,
+            w0_initial=30.
+        )
+
+        h_s = HNNMassSpringSeparable(network).to(device)
+        model = DENNet(h_s).to(device)
+
+    learn_sep = Learner(model)
+    logger = TensorBoardLogger('separable_logs_siren')
+    trainer_sep = pl.Trainer(min_epochs=50, max_epochs=100, logger=logger)
+    trainer_sep.fit(learn_sep)
+
+    return h_s, model
+
+
 if __name__ == '__main__':
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -153,9 +182,9 @@ if __name__ == '__main__':
 
         # hamiltonian, basic_model = basic_hnn()
         if tStep == 0:
-            separable, separable_model = separable_hnn()
+            separable, separable_model = separable_hnn_siren()
         else:
-            separable, separable_model = separable_hnn(input_h_s=separable, input_model=separable_model)
+            separable, separable_model = separable_hnn_siren(input_h_s=separable, input_model=separable_model)
 
 
         # set up time integrator that uses our HNN
