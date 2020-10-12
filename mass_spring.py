@@ -98,7 +98,6 @@ def separable_hnn(input_h_s=None, input_model=None):
     return h_s, model
 
 
-
 if __name__ == '__main__':
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
