@@ -2,7 +2,9 @@ import torch
 import torch.nn as nn
 import torchdiffeq
 import pytorch_lightning as pl
-from maths.diffeq import DiffEq
+from src.maths.diffeq import DiffEq
+from src.maths.diffeq import DiffEq
+from src.maths.diffeq_1DWave import DiffEq_1DWave
 
 
 class DENNet(pl.LightningModule):
@@ -12,11 +14,17 @@ class DENNet(pl.LightningModule):
     """
 
     def __init__(self, func: nn.Module, order=1, sensitivity='autograd', s_span=torch.linspace(0, 1, 2), solver='rk4',
-                 atol=1e-4, rtol=1e-4):
+                 atol=1e-4, rtol=1e-4, case='springmass'):
         super().__init__()
 
         # have an if for DiffEq of PDEeq
-        self.de_function = DiffEq(func, order)
+        if case == 'springmass':
+            self.de_function = DiffEq(func, order)
+        elif case == '1DWave':
+            self.de_function = DiffEq_1DWave(func, order)
+        else:
+            print('case named {} is not applied'.format(case))
+
         self.order = order
         self.sensitivity = sensitivity
         self.t_span = s_span
@@ -24,6 +32,7 @@ class DENNet(pl.LightningModule):
         self.nfe = self.de_function.nfe
         self.rtol = rtol
         self.atol = atol
+        self.case = case
 
     def _prep_odeint(self, x: torch.Tensor):
         self.t_span = self.t_span.to(x)

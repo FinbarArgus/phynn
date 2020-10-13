@@ -33,13 +33,13 @@ class TimeIntegrator(nn.Module):
         """
         grads0 = self.model.forward(x0)
         p_temp = x0[:, 1] + dt / 2 * grads0[:, 1]
-        x_temp = torch.cat([x0[:, 0].unsqueeze(1), p_temp.unsqueeze(1)], 1)
-        grads_temp = self.model.forward(x_temp)
+        x_temp = torch.cat([x0[:, 0].unsqueeze(1), p_temp.unsqueeze(1)], 1).detach()
+        grads_temp = self.model.forward(x_temp).detach()
         q1 = x0[:, 0] + dt * grads_temp[:, 0]
-        x_temp2 = torch.cat([q1.unsqueeze(1), p_temp.unsqueeze(1)], 1)
-        grads_temp2 = self.model.forward(x_temp2)
+        x_temp2 = torch.cat([q1.unsqueeze(1), p_temp.unsqueeze(1)], 1).detach()
+        grads_temp2 = self.model.forward(x_temp2).detach()
         p1 = p_temp + dt / 2 * grads_temp2[:, 1]
-        return torch.cat([q1.unsqueeze(1), p1.unsqueeze(1)], 1)
+        return torch.cat([q1.unsqueeze(1).detach(), p1.unsqueeze(1).detach()], 1)
 
     def integrate(self, x_init, t_span, method='Euler'):
         x_path = torch.zeros([x_init.shape[0], x_init.shape[1], t_span.shape[0]]).to(x_init)
