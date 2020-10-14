@@ -38,11 +38,10 @@ class HNNMassSpringSeparable(nn.Module):
 
 
 class HNN1DWaveSeparable(nn.Module):
-    def __init__(self, hamiltonian: nn.Module, num_points, dim=1):
+    def __init__(self, hamiltonian: nn.Module, dim=1):
         super().__init__()
         self.H = hamiltonian
         self.n = dim
-        self.num_points = num_points
 
     def forward(self, x, q, p, detach=False):
         #This function calculates y_hat = (q_dot_hat, p_dot_hat) = (dH_dp_dx, -dH_dq_dx)
@@ -73,12 +72,12 @@ class HNN1DWaveSeparable(nn.Module):
                 dH_dq_dx = torch.stack(dH_dq_dx_list)
                 dH_dp_dx = torch.stack(dH_dp_dx_list)
 
-        return dH_dp_dx, -dH_dq_dx
+        return -dH_dp_dx, -dH_dq_dx
 
     def forward_wgrads(self, x, q, p, dq_dx, dp_dx):
         #This function calculates y_hat = (q_dot_hat, p_dot_hat) = (dH_dp_dx, -dH_dq_dx)
         grads = self.forward(x, q, p, detach=False)
-        dH_dp_dx = grads[0]
+        dH_dp_dx = -grads[0]
         dH_dq_dx = -grads[1]
 
         with torch.set_grad_enabled(True):
@@ -100,7 +99,7 @@ class HNN1DWaveSeparable(nn.Module):
             dH_dq_dx_dx = torch.stack(dH_dq_dx_dx_list)
             dH_dp_dx_dx = torch.stack(dH_dp_dx_dx_list)
 
-        return dH_dp_dx.detach(), -dH_dq_dx.detach(), dH_dp_dx_dx.detach(), -dH_dq_dx_dx.detach()
+        return -dH_dp_dx.detach(), -dH_dq_dx.detach(), -dH_dp_dx_dx.detach(), -dH_dq_dx_dx.detach()
 
 
 
