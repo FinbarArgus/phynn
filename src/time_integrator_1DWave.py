@@ -99,10 +99,10 @@ class TimeIntegrator(nn.Module):
         return q_1, p_1, dq_dx_1, dp_dx_1
 
     def integrate(self, x_0, q_0, p_0, t_span, method='SV'):
-        q_path = torch.zeros([x_0.shape[0], t_span.shape[0]]).to(x_0)
-        p_path = torch.zeros([x_0.shape[0], t_span.shape[0]]).to(x_0)
-        q_path[:, 0] = q_0
-        p_path[:, 0] = p_0
+        q_path = torch.zeros([1, x_0[0].shape[0], t_span.shape[0]]).to(x_0)
+        p_path = torch.zeros([1, x_0[0].shape[0], t_span.shape[0]]).to(x_0)
+        q_path[:, :, 0] = q_0
+        p_path[:, :, 0] = p_0
         print('integrating for trajectory')
         for count, t in enumerate(t_span):
             print(count)
@@ -110,10 +110,10 @@ class TimeIntegrator(nn.Module):
                 continue
             dt = t - t_span[count - 1]
             if method == 'Euler':
-                q_path[:, count], p_path[:, count] = self.euler_step(x_0, q_path[:, count - 1],
-                                                                     p_path[:, count - 1], dt)
+                q_path[:, :, count], p_path[:, :, count] = self.euler_step(x_0, q_path[:, :, count - 1],
+                                                                     p_path[:, :, count - 1], dt)
             elif method == 'SV':
-                q_path[:, count], p_path[:, count] = self.sv_step(x_0, q_path[:, count - 1],
-                                                                  p_path[:, count - 1], dt)
+                q_path[:, :, count], p_path[:, :, count] = self.sv_step(x_0, q_path[:, :, count - 1],
+                                                                  p_path[:, :, count - 1], dt)
 
         return q_path, p_path
