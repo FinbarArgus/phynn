@@ -146,7 +146,7 @@ def separable_hnn_siren(input_h_s=None, input_model=None):
 
     learn_sep = Learner(model)
     logger = TensorBoardLogger('separable_logs_siren')
-    trainer_sep = pl.Trainer(min_epochs=50, max_epochs=100, logger=logger)
+    trainer_sep = pl.Trainer(min_epochs=50, max_epochs=100, logger=logger, gpus=1)
     trainer_sep.fit(learn_sep)
 
     return h_s, model
