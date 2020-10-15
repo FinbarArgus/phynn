@@ -1,7 +1,7 @@
 import torch.nn as nn
 
 
-class DiffEq_1DWave(nn.Module):
+class Diffeq1DWave(nn.Module):
     """
     A wrapper for differential equations. Currently this class supports only DEs of order 1.
 
