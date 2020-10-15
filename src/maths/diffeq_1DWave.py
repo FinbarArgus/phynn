@@ -10,6 +10,8 @@ class DiffEq_1DWave(nn.Module):
 
     def __init__(self, model, order=1):
         super().__init__()
+        # TODO(Finbar) the name model is overused maybe change this to func, like in the
+        # TODO parent process
         self.model = model
         self.nfe = 0.  # number of function evaluations.
         self.order = order
@@ -21,6 +23,7 @@ class DiffEq_1DWave(nn.Module):
         self.nfe += 1
 
         # This was needed for bugfix with datatype
+        # TODO is this still needed??
         for _, module in self.model.named_modules():
             if hasattr(module, 's'):
                 module.s = s
