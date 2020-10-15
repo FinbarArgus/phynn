@@ -22,12 +22,6 @@ class DiffEq_1DWave(nn.Module):
     def forward(self, s, x, q, p):
         self.nfe += 1
 
-        # This was needed for bugfix with datatype
-        # TODO is this still needed??
-        for _, module in self.model.named_modules():
-            if hasattr(module, 's'):
-                module.s = s
-
         if self.order > 1:
             None  # TODO
         else:
