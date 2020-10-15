@@ -44,13 +44,22 @@ class Learner(pl.LightningModule):
         # this function calculates f = (q_dot, p_dot) = (dp_dx, -dq_dx)
         return -dp_dx, -dq_dx
 
+    @staticmethod
+    def add_gaussian_noise(input, mean, stddev):
+        noise = input.data.new(input.size()).normal_(mean, stddev)
+        return input + noise
+
     def training_step(self, batch, batch_idx):
         batch_size = len(batch[0])
+
+        # get input data and add noise
         x = batch[0]
-        q = batch[1]
-        p = batch[2]
-        dq_dx = batch[3]
-        dp_dx = batch[4]
+        q = self.add_gaussian_noise(batch[1], 0.0, 0.05)
+        p = self.add_gaussian_noise(batch[2], 0.0, 0.05)
+        dq_dx = self.add_gaussian_noise(batch[3], 0.0, 0.05)
+        dp_dx =  self.add_gaussian_noise(batch[4], 0.0, 0.05)
+
+
         # Calculate y_hat = (q_dot_hat, p_dot_hat) from the gradient of the HNN
         q_dot_hat, p_dot_hat = self.model.de_function(0, x, q, p)
         y_hat = torch.cat([q_dot_hat, p_dot_hat], dim=1)
@@ -82,7 +91,7 @@ class Learner(pl.LightningModule):
         return {'loss': loss, 'log': logs}
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.model.parameters(), lr=0.001)
+        return torch.optim.Adam(self.model.parameters(), lr=0.0001)
 
     @staticmethod
     def train_dataloader():
@@ -118,7 +127,7 @@ def separable_hnn(num_points, input_h_s=None, input_model=None,
         learn_sep = Learner(model, num_boundary=num_boundary, save_path=save_path,
                             epoch_save=epoch_save)
         logger = TensorBoardLogger('separable_logs')
-        trainer_sep = pl.Trainer(min_epochs=1000, max_epochs=1000, logger=logger, gpus=1)
+        trainer_sep = pl.Trainer(min_epochs=701, max_epochs=701, logger=logger, gpus=1)
         trainer_sep.fit(learn_sep)
 
     return h_s, model
@@ -139,11 +148,11 @@ if __name__ == '__main__':
 
     # Training conditions
     num_train_samples = 1
-    num_train_xCoords = 40
+    num_train_xCoords = 60
     num_tSteps_training = 1
-    num_boundary = 3
-    num_datasets = 512
-    batch_size = 128
+    num_boundary = 5
+    num_datasets = 8192
+    batch_size = 1024
     # Training initial conditions [q, p, dq/dx, dp/dx, x]
     x_coord = torch.zeros(num_datasets, num_train_xCoords).to(device)
     x_coord[:, num_boundary:-1*num_boundary] = torch.rand(num_datasets, num_train_xCoords-num_boundary*2).sort()[0]
@@ -181,10 +190,10 @@ if __name__ == '__main__':
     dq_dx_test = -amplitude_q_test*np.pi ** 2 * torch.sin(np.pi * x_coord_test).to(device)
     dp_dx_test = torch.zeros(num_train_xCoords).to(device)
     # Testing time span
-    t_span_test = torch.linspace(0, 4.0, 400).to(device)
+    t_span_test = torch.linspace(0, 0.3, 60).to(device)
 
     # bool to determine if model is loaded
-    load_model = True
+    load_model = False
 
     # Wrap in for loop and change inputs to the stepped forward p's and q's
     for tStep in range(num_tSteps_training):
@@ -259,14 +268,14 @@ if __name__ == '__main__':
 
 
     def animate(i):
-        line.set_data(x_coord_test, q_traj[:, i])
-        line2.set_data(x_coord_test, p_traj[:, i])
+        line.set_data(x_coord_test[0], q_traj[0, :, i])
+        line2.set_data(x_coord_test[0], p_traj[0, :, i])
         return line, line2,
 
 
     anim = FuncAnimation(fig, animate, frames=len(t_span_test), init_func=init, blit=True)
     plt.show()
-    #anim.save('test_anim.gif', writer='ffmpeg')
+    # anim.save('test_anim.gif', writer='ffmpeg')
 
 
 
