@@ -27,7 +27,9 @@ class TimeIntegrator(nn.Module):
         """
         Stormer-Verlet (SV) (aka leapfrog) time integration scheme.
 
-        :param x_0:
+        :param x:
+        :param q_0:
+        :param p_0:
         :param dt:
         :return:
         """
@@ -58,7 +60,11 @@ class TimeIntegrator(nn.Module):
         """
         Stormer-Verlet (SV) (aka leapfrog) time integration scheme.
 
-        :param x_0:
+        :param x:
+        :param q_0:
+        :param p_0:
+        :param dq_dx_0:
+        :param dp_dx_0:
         :param dt:
         :return:
         """
@@ -72,7 +78,7 @@ class TimeIntegrator(nn.Module):
         p_temp = p_0 + dt / 2 * p_dot_0
         dp_dx_temp = dp_dx_0 + dt / 2 * dp_dot_dx_0
         q_dot_temp, p_dot_temp, dq_dot_dx_temp, dp_dot_dx_temp = self.model.forward_wgrads(x, q_0, p_temp,
-                                                                                         dq_dx_0, dp_dx_temp)
+                                                                                           dq_dx_0, dp_dx_temp)
         x = x.detach()
         q_0 = q_0.detach()
         p_temp = p_temp.detach()
@@ -82,7 +88,7 @@ class TimeIntegrator(nn.Module):
         q_1 = q_0 + dt * q_dot_temp
         dq_dx_1 = dq_dx_0 + dt * dq_dot_dx_temp
         q_dot_temp2, p_dot_temp2, dq_dot_dx_temp2, dp_dot_dx_temp2 = self.model.forward_wgrads(x, q_1, p_temp,
-                                                                                             dq_dx_1, dp_dx_temp)
+                                                                                               dq_dx_1, dp_dx_temp)
         # x = x.detach()
         q_1 = q_1.detach()
         p_temp = p_temp.detach()
@@ -107,12 +113,9 @@ class TimeIntegrator(nn.Module):
             dt = t - t_span[count - 1]
             if method == 'Euler':
                 q_path[:, :, count], p_path[:, :, count] = self.euler_step(x_0, q_path[:, :, count - 1],
-                                                                     p_path[:, :, count - 1], dt)
+                                                                           p_path[:, :, count - 1], dt)
             elif method == 'SV':
                 q_path[:, :, count], p_path[:, :, count] = self.sv_step(x_0, q_path[:, :, count - 1],
-                                                                  p_path[:, :, count - 1], dt)
+                                                                        p_path[:, :, count - 1], dt)
 
         return q_path, p_path
-
-
-

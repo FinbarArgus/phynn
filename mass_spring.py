@@ -146,7 +146,7 @@ def separable_hnn_siren(input_h_s=None, input_model=None):
 
     learn_sep = Learner(model)
     logger = TensorBoardLogger('separable_logs_siren')
-    trainer_sep = pl.Trainer(min_epochs=50, max_epochs=100, logger=logger)
+    trainer_sep = pl.Trainer(min_epochs=50, max_epochs=100, logger=logger, gpus=1)
     trainer_sep.fit(learn_sep)
 
     return h_s, model
@@ -158,21 +158,20 @@ if __name__ == '__main__':
     # Training conditions
     num_train_data = 100
     num_tSteps_training = 5
-    # Training initial conditions
-    X_sv = torch.cat([
+
+    X_sv = torch.cat([  # Training initial conditions
         (3 * torch.rand(num_train_data) - 1.5).unsqueeze(1),
         (3 * torch.rand(num_train_data) - 1.5).unsqueeze(1)
     ], 1).to(device)
-    # X_euler = X_sv
-    # Training time step
-    dt_train = 0.05
+
+    dt_train = 0.05  # Training time step
 
     # Testing conditions
     q_init = torch.linspace(0.2, 1.5, 3)
     p_init = torch.zeros(q_init.shape)
     x_init = torch.cat([q_init.unsqueeze(1), p_init.unsqueeze(1)], 1).to(device)
-    # Testing time span
-    t_span_test = torch.linspace(0, 20, 400).to(device)
+
+    t_span_test = torch.linspace(0, 20, 400).to(device)  # Testing time span
 
     # Wrap in for loop and change inputs to the stepped forward p's and q's
     for tStep in range(num_tSteps_training):

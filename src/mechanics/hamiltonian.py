@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import numpy as np
 
 
 class HNNMassSpring(nn.Module):
@@ -60,9 +59,9 @@ class HNN1DWaveSeparable(nn.Module):
             # wrt the n'th x coordinate
             for x_idx in range(len(dH_dq[0])):
                 dH_dq_dx[:, x_idx] = torch.autograd.grad(dH_dq[:, x_idx].sum(), x,
-                                                     allow_unused=False, create_graph=True)[0][:, x_idx]
+                                                         allow_unused=False, create_graph=True)[0][:, x_idx]
                 dH_dp_dx[:, x_idx] = torch.autograd.grad(dH_dp[:, x_idx].sum(), x,
-                                                     allow_unused=False, create_graph=True)[0][:, x_idx]
+                                                         allow_unused=False, create_graph=True)[0][:, x_idx]
 
             if detach:
                 dH_dq_dx = dH_dq_dx.detach()
