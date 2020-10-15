@@ -27,7 +27,9 @@ class TimeIntegrator(nn.Module):
         """
         Stormer-Verlet (SV) (aka leapfrog) time integration scheme.
 
-        :param x_0:
+        :param x:
+        :param q_0:
+        :param p_0:
         :param dt:
         :return:
         """
@@ -111,9 +113,9 @@ class TimeIntegrator(nn.Module):
             dt = t - t_span[count - 1]
             if method == 'Euler':
                 q_path[:, :, count], p_path[:, :, count] = self.euler_step(x_0, q_path[:, :, count - 1],
-                                                                     p_path[:, :, count - 1], dt)
+                                                                           p_path[:, :, count - 1], dt)
             elif method == 'SV':
                 q_path[:, :, count], p_path[:, :, count] = self.sv_step(x_0, q_path[:, :, count - 1],
-                                                                  p_path[:, :, count - 1], dt)
+                                                                        p_path[:, :, count - 1], dt)
 
         return q_path, p_path
