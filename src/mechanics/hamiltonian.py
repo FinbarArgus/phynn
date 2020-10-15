@@ -10,9 +10,6 @@ class HNNMassSpring(nn.Module):
         self.n = dim
 
     def forward(self, x):
-        # TODO (Finbar) do I need to include a kwarg for grads=True so i can set it to false when evaluating time step?
-        # TODO (Mahyar) I don't think that's needed as we're using `detach()` when evaluating. Let me know if disagree.
-
         with torch.set_grad_enabled(True):
             x = x.requires_grad_(True)
             grad_h = torch.autograd.grad(self.H(x).sum(), x, allow_unused=False, create_graph=True)[0]
@@ -38,47 +35,46 @@ class HNNMassSpringSeparable(nn.Module):
 
 
 class HNN1DWaveSeparable(nn.Module):
-    def __init__(self, hamiltonian: nn.Module, num_points, dim=1):
+    def __init__(self, hamiltonian: nn.Module, dim=1):
         super().__init__()
         self.H = hamiltonian
         self.n = dim
-        self.num_points = num_points
 
     def forward(self, x, q, p, detach=False):
-        #This function calculates y_hat = (q_dot_hat, p_dot_hat) = (dH_dp_dx, -dH_dq_dx)
+        """This function calculates y_hat = (q_dot_hat, p_dot_hat) = (dH_dp_dx, -dH_dq_dx)
+        """
         with torch.set_grad_enabled(True):
             x = x.requires_grad_(True)
             q = q.requires_grad_(True)
             p = p.requires_grad_(True)
 
-            dH_dq = torch.autograd.grad(self.H(torch.cat([x, q, p])).sum(), q, allow_unused=False,
-                                        create_graph=True)[0].unsqueeze(1)
-            dH_dp = torch.autograd.grad(self.H(torch.cat([x, q, p])).sum(), p, allow_unused=False,
-                                        create_graph=True)[0].unsqueeze(1)
+            dH_dq = torch.autograd.grad(self.H(torch.cat([x, q, p], dim=1)).sum(), q, allow_unused=False,
+                                        create_graph=True)[0]
+            dH_dp = torch.autograd.grad(self.H(torch.cat([x, q, p], dim=1)).sum(), p, allow_unused=False,
+                                        create_graph=True)[0]
 
-            dH_dq_dx_list = []
-            dH_dp_dx_list = []
-
+            dH_dq_dx = torch.Tensor(len(x), len(x[0])).to(x)
+            dH_dp_dx = torch.Tensor(len(x), len(x[0])).to(x)
             # loop through dH_dq and dH_dp entries and get the derivative of each one wrt to the corresponding x_idx
-            for x_idx, (dH_dq_entry, dH_dp_entry) in enumerate(zip(dH_dq, dH_dp)):
-                dH_dq_dx_entry = torch.autograd.grad(dH_dq_entry, x, allow_unused=False, create_graph=True)[0][x_idx]
-                dH_dp_dx_entry = torch.autograd.grad(dH_dp_entry, x, allow_unused=False, create_graph=True)[0][x_idx]
-                dH_dq_dx_list.append(dH_dq_dx_entry)
-                dH_dp_dx_list.append(dH_dp_dx_entry)
+            # we cant differentiate the whole dH_dq or dH_dq because we only want the derivative of the n'th dH_dq
+            # wrt the n'th x coordinate
+            for x_idx in range(len(dH_dq[0])):
+                dH_dq_dx[:, x_idx] = torch.autograd.grad(dH_dq[:, x_idx].sum(), x,
+                                                     allow_unused=False, create_graph=True)[0][:, x_idx]
+                dH_dp_dx[:, x_idx] = torch.autograd.grad(dH_dp[:, x_idx].sum(), x,
+                                                     allow_unused=False, create_graph=True)[0][:, x_idx]
 
             if detach:
-                dH_dq_dx = torch.stack(dH_dq_dx_list).detach()
-                dH_dp_dx = torch.stack(dH_dp_dx_list).detach()
-            else:
-                dH_dq_dx = torch.stack(dH_dq_dx_list)
-                dH_dp_dx = torch.stack(dH_dp_dx_list)
+                dH_dq_dx = dH_dq_dx.detach()
+                dH_dp_dx = dH_dp_dx.detach()
 
-        return dH_dp_dx, -dH_dq_dx
+        return -dH_dp_dx, -dH_dq_dx
 
     def forward_wgrads(self, x, q, p, dq_dx, dp_dx):
-        #This function calculates y_hat = (q_dot_hat, p_dot_hat) = (dH_dp_dx, -dH_dq_dx)
+        """This function calculates y_hat = (q_dot_hat, p_dot_hat) = (dH_dp_dx, -dH_dq_dx)
+        """
         grads = self.forward(x, q, p, detach=False)
-        dH_dp_dx = grads[0]
+        dH_dp_dx = -grads[0]
         dH_dq_dx = -grads[1]
 
         with torch.set_grad_enabled(True):
@@ -100,12 +96,4 @@ class HNN1DWaveSeparable(nn.Module):
             dH_dq_dx_dx = torch.stack(dH_dq_dx_dx_list)
             dH_dp_dx_dx = torch.stack(dH_dp_dx_dx_list)
 
-        return dH_dp_dx.detach(), -dH_dq_dx.detach(), dH_dp_dx_dx.detach(), -dH_dq_dx_dx.detach()
-
-
-
-
-
-
-
-
+        return -dH_dp_dx.detach(), -dH_dq_dx.detach(), -dH_dp_dx_dx.detach(), -dH_dq_dx_dx.detach()
