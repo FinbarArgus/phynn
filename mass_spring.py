@@ -9,6 +9,7 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from src.maths.dennet import DENNet
 from src.mechanics.hamiltonian import HNNMassSpring, HNNMassSpringSeparable
 from src.time_integrator import TimeIntegrator
+from src.utils.activation import Siren
 
 import matplotlib.pyplot as plt
 
@@ -52,6 +53,30 @@ class Learner(pl.LightningModule):
     @staticmethod
     def train_dataloader():
         return trainloader
+
+
+class SirenNet(nn.Module):
+    def __init__(self, dim_in, dim_hidden, dim_out, num_layers, w0=30., w0_initial=30.):
+        super().__init__()
+        layers = list()
+        for ind in range(num_layers):
+            is_first = ind == 0
+            layer_w0 = w0_initial if is_first else w0
+            layer_dim_in = dim_in if is_first else dim_hidden
+
+            layers.append(Siren(
+                dim_in=layer_dim_in,
+                dim_out=dim_hidden,
+                w0=layer_w0,
+                is_first=is_first
+            ))
+
+        self.net = nn.Sequential(*layers)
+        self.last_layer = nn.Linear(dim_hidden, dim_out)
+
+    def forward(self, x):
+        x = self.net(x)
+        return self.last_layer(x)
 
 
 def basic_hnn():
@@ -98,6 +123,34 @@ def separable_hnn(input_h_s=None, input_model=None):
     return h_s, model
 
 
+def separable_hnn_siren(input_h_s=None, input_model=None):
+    """
+    Separable Hamiltonian network using Siren network.
+
+    :return:
+    """
+    if input_h_s:
+        h_s = input_h_s
+        model = input_model
+    else:
+        network = SirenNet(
+            dim_in=2,
+            dim_hidden=100,
+            dim_out=1,
+            num_layers=5,
+            w0_initial=30.
+        )
+
+        h_s = HNNMassSpringSeparable(network).to(device)
+        model = DENNet(h_s).to(device)
+
+    learn_sep = Learner(model)
+    logger = TensorBoardLogger('separable_logs_siren')
+    trainer_sep = pl.Trainer(min_epochs=50, max_epochs=100, logger=logger, gpus=1)
+    trainer_sep.fit(learn_sep)
+
+    return h_s, model
+
 
 if __name__ == '__main__':
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -105,21 +158,20 @@ if __name__ == '__main__':
     # Training conditions
     num_train_data = 100
     num_tSteps_training = 5
-    # Training initial conditions
-    X_sv = torch.cat([
+
+    X_sv = torch.cat([  # Training initial conditions
         (3 * torch.rand(num_train_data) - 1.5).unsqueeze(1),
         (3 * torch.rand(num_train_data) - 1.5).unsqueeze(1)
     ], 1).to(device)
-    # X_euler = X_sv
-    # Training time step
-    dt_train = 0.05
+
+    dt_train = 0.05  # Training time step
 
     # Testing conditions
     q_init = torch.linspace(0.2, 1.5, 3)
     p_init = torch.zeros(q_init.shape)
     x_init = torch.cat([q_init.unsqueeze(1), p_init.unsqueeze(1)], 1).to(device)
-    # Testing time span
-    t_span_test = torch.linspace(0, 20, 400).to(device)
+
+    t_span_test = torch.linspace(0, 20, 400).to(device)  # Testing time span
 
     # Wrap in for loop and change inputs to the stepped forward p's and q's
     for tStep in range(num_tSteps_training):
@@ -129,26 +181,13 @@ if __name__ == '__main__':
 
         # hamiltonian, basic_model = basic_hnn()
         if tStep == 0:
-            separable, separable_model = separable_hnn()
+            separable, separable_model = separable_hnn_siren()
         else:
-            separable, separable_model = separable_hnn(input_h_s=separable, input_model=separable_model)
+            separable, separable_model = separable_hnn_siren(input_h_s=separable, input_model=separable_model)
 
-
-        # set up time integrator that uses our HNN
-        # time_integrator_euler = TimeIntegrator(hamiltonian).to(device)
         time_integrator_sv = TimeIntegrator(separable).to(device)
 
-        # Evaluate the HNN trajectory for 1 step and then reset the initial condition for more training
-        # X = time_integrator_euler.sv_step(X, dt_train)
         X_sv = time_integrator_sv.sv_step(X_sv, dt_train).detach()
-
-    # calculate trajectory with odeint
-    # traj = model.trajectory(xInit, s_span).detach().cpu()
-
-    # set up time integrator that uses our HNN
-    # time_integrator_euler = TimeIntegrator(hamiltonian).to(device)
-    # calculate trajectory with an euler step
-    # traj_HNN_Euler = time_integrator_euler.integrate(x_init, t_span_test, method='Euler').detach().cpu()
 
     # set up time integrator that uses our separable HNN
     time_integrator_sv = TimeIntegrator(separable).to(device)

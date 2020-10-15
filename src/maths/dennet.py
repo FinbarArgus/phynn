@@ -3,8 +3,7 @@ import torch.nn as nn
 import torchdiffeq
 import pytorch_lightning as pl
 from src.maths.diffeq import DiffEq
-from src.maths.diffeq import DiffEq
-from src.maths.diffeq_1DWave import DiffEq_1DWave
+from src.maths.diffeq_1DWave import Diffeq1DWave
 
 
 class DENNet(pl.LightningModule):
@@ -21,7 +20,7 @@ class DENNet(pl.LightningModule):
         if case == 'springmass':
             self.de_function = DiffEq(func, order)
         elif case == '1DWave':
-            self.de_function = DiffEq_1DWave(func, order)
+            self.de_function = Diffeq1DWave(func, order)
         else:
             print('case named {} is not applied'.format(case))
 

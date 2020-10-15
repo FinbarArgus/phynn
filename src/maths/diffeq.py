@@ -20,11 +20,6 @@ class DiffEq(nn.Module):
     def forward(self, s, x):
         self.nfe += 1
 
-        # This was needed for bugfix with datatype
-        for _, module in self.model.named_modules():
-            if hasattr(module, 's'):
-                module.s = s
-
         if self.order > 1:
             None  # TODO
         else:
