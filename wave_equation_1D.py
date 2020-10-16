@@ -5,6 +5,7 @@ import numpy as np
 
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
+from matplotlib.animation import PillowWriter
 
 import time
 import os
@@ -16,6 +17,11 @@ from src.time_integrator_1DWave import TimeIntegrator
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 
+class LoopingPillowWriter(PillowWriter):
+    def finish(self):
+        self._frames[0].save(
+            self._outfile, save_all=True, append_images=self._frames[1:],
+            duration=int(1000 / self.fps), loop=0)
 
 class Learner(pl.LightningModule):
     def __init__(self, model: nn.Module, num_boundary=1, save_path='temp_save_path',
@@ -91,7 +97,7 @@ class Learner(pl.LightningModule):
         return {'loss': loss, 'log': logs}
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.model.parameters(), lr=0.0001)
+        return torch.optim.Adam(self.model.parameters(), lr=0.0004, weight_decay=0.01)
 
     @staticmethod
     def train_dataloader():
@@ -111,23 +117,29 @@ def separable_hnn(num_points, input_h_s=None, input_model=None,
     else:
         h_s = HNN1DWaveSeparable(nn.Sequential(
             nn.Linear(3*num_points, 20),
+            nn.Dropout(0.2),
             nn.Tanh(),
             nn.Linear(20, 20),
+            nn.Dropout(0.2),
             nn.Tanh(),
             nn.Linear(20, 20),
+            nn.Dropout(0.2),
             nn.Tanh(),
             nn.Linear(20, 20),
+            nn.Dropout(0.2),
             nn.Tanh(),
             nn.Linear(20, 20),
+            nn.Dropout(0.2),
             nn.Tanh(),
-            nn.Linear(20, 1))).to(device)
+            nn.Linear(20, 1),
+            nn.Dropout(0.2))).to(device)
         model = DENNet(h_s, case='1DWave').to(device)
 
     if train:
         learn_sep = Learner(model, num_boundary=num_boundary, save_path=save_path,
                             epoch_save=epoch_save)
         logger = TensorBoardLogger('separable_logs')
-        trainer_sep = pl.Trainer(min_epochs=701, max_epochs=701, logger=logger, gpus=1)
+        trainer_sep = pl.Trainer(min_epochs=2001, max_epochs=2001, logger=logger, gpus=1)
         trainer_sep.fit(learn_sep)
 
     return h_s, model
@@ -209,7 +221,7 @@ if __name__ == '__main__':
 
             checkpoint = torch.load(save_path)
             separable_model.load_state_dict(checkpoint['model_state_dict'])
-            separable = separable_model.de_function.model
+            separable = separable_model.de_function.func
             # optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             epoch = checkpoint['epoch']
             loss = checkpoint['loss']
@@ -274,8 +286,10 @@ if __name__ == '__main__':
 
 
     anim = FuncAnimation(fig, animate, frames=len(t_span_test), init_func=init, blit=True)
-    plt.show()
-    # anim.save('test_anim.gif', writer='ffmpeg')
+    #plt.show()
+    writer = LoopingPillowWriter(fps=20)
+    # TODO change name for saved animation
+    anim.save('tanh_1d_wave.gif', writer=writer)
 
 
 

@@ -8,11 +8,11 @@ class Diffeq1DWave(nn.Module):
     TODO: Support for higher order DEs.
     """
 
-    def __init__(self, model, order=1):
+    def __init__(self, func, order=1):
         super().__init__()
         # TODO(Finbar) the name model is overused maybe change this to func, like in the
         # TODO parent process
-        self.model = model
+        self.func = func
         self.nfe = 0.  # number of function evaluations.
         self.order = order
         self._intloss = None
@@ -25,6 +25,6 @@ class Diffeq1DWave(nn.Module):
         if self.order > 1:
             None  # TODO
         else:
-            x = self.model(x, q, p)
+            x = self.func(x, q, p)
         self._dxds = x
         return x
