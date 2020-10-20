@@ -60,10 +60,10 @@ class Learner(pl.LightningModule):
 
         # get input data and add noise
         x = batch[0]
-        q = self.add_gaussian_noise(batch[1], 0.0, 0.05)
-        p = self.add_gaussian_noise(batch[2], 0.0, 0.05)
-        dq_dx = self.add_gaussian_noise(batch[3], 0.0, 0.05)
-        dp_dx =  self.add_gaussian_noise(batch[4], 0.0, 0.05)
+        q = self.add_gaussian_noise(batch[1], 0.0, 0.1)
+        p = self.add_gaussian_noise(batch[2], 0.0, 0.1)
+        dq_dx = self.add_gaussian_noise(batch[3], 0.0, 0.1)
+        dp_dx =  self.add_gaussian_noise(batch[4], 0.0, 0.1)
 
 
         # Calculate y_hat = (q_dot_hat, p_dot_hat) from the gradient of the HNN
@@ -97,7 +97,7 @@ class Learner(pl.LightningModule):
         return {'loss': loss, 'log': logs}
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.model.parameters(), lr=0.0004, weight_decay=0.01)
+        return torch.optim.Adam(self.model.parameters(), lr=0.0006, weight_decay=0.02)
 
     @staticmethod
     def train_dataloader():
@@ -139,7 +139,7 @@ def separable_hnn(num_points, input_h_s=None, input_model=None,
         learn_sep = Learner(model, num_boundary=num_boundary, save_path=save_path,
                             epoch_save=epoch_save)
         logger = TensorBoardLogger('separable_logs')
-        trainer_sep = pl.Trainer(min_epochs=2001, max_epochs=2001, logger=logger, gpus=1)
+        trainer_sep = pl.Trainer(min_epochs=0, max_epochs=0, logger=logger, gpus=1)
         trainer_sep.fit(learn_sep)
 
     return h_s, model
@@ -198,11 +198,11 @@ if __name__ == '__main__':
     amplitude_q_test = 0.5
     #x_coord_test = torch.rand(num_train_xCoords).to(device)
     q_test = amplitude_q_test * np.pi * torch.cos(np.pi * x_coord_test).to(device)
-    p_test = torch.zeros(num_train_xCoords).to(device)
+    p_test = torch.zeros(1, num_train_xCoords).to(device)
     dq_dx_test = -amplitude_q_test*np.pi ** 2 * torch.sin(np.pi * x_coord_test).to(device)
-    dp_dx_test = torch.zeros(num_train_xCoords).to(device)
+    dp_dx_test = torch.zeros(1, num_train_xCoords).to(device)
     # Testing time span
-    t_span_test = torch.linspace(0, 0.3, 60).to(device)
+    t_span_test = torch.linspace(0, 0.2, 40).to(device)
 
     # bool to determine if model is loaded
     load_model = True
@@ -261,35 +261,47 @@ if __name__ == '__main__':
     # set up time integrator that uses our separable HNN
     time_integrator_sv = TimeIntegrator(separable).to(device)
     # calculate trajectory
-    q_traj, p_traj = time_integrator_sv.integrate(x_coord_test, q_test, p_test,
+    q_traj, p_traj, H_traj = time_integrator_sv.integrate(x_coord_test, q_test, p_test,
                                                   t_span_test, method='SV')
     x_coord_test = x_coord_test.detach().cpu()
+    t_span_test = t_span_test.detach().cpu()
     q_traj = q_traj.detach().cpu()
     p_traj = p_traj.detach().cpu()
+    H_traj = H_traj.detach().cpu()
 
-    fig = plt.figure(figsize=(8, 8))
+    fig, (ax, ax2) = plt.subplots(2, 1)
 
-    ax = plt.axes(xlim=(0, 1), ylim=(-2, 2))
-    line, = ax.plot([], [], lw=3)
-    line2, = ax.plot([], [], lw=3, color='r')
+    ax.set_xlim(0, 1)
+    ax.set_ylim(-2, 2)
+    ax2.set_xlim(0, t_span_test[-1])
+    ax2.set_ylim(-100, 100)
+    ax.set_xlabel('x [m]')
+    ax2.set_xlabel('t [s]')
+    ax2.set_ylabel('Hamiltonian [J]')
+    line, = ax.plot([], [], label='q', lw=3)
+    line2, = ax.plot([], [], label='p', lw=3, color='r')
+    line3, = ax2.plot([], [], lw=3, color='k')
+    ax.legend()
 
     def init():
         line.set_data([], [])
         line2.set_data([], [])
+        line3.set_data([], [])
         return line,
 
 
     def animate(i):
         line.set_data(x_coord_test[0], q_traj[0, :, i])
         line2.set_data(x_coord_test[0], p_traj[0, :, i])
-        return line, line2,
+        line3.set_data(t_span_test[0:i], H_traj[0:i])
+        return line, line2, line3
 
 
     anim = FuncAnimation(fig, animate, frames=len(t_span_test), init_func=init, blit=True)
     #plt.show()
     writer = LoopingPillowWriter(fps=20)
     # TODO change name for saved animation
-    anim.save('tanh_1d_wave.gif', writer=writer)
+    anim.save('tanh_1d_wave_V4.gif', writer=writer)
 
 
 

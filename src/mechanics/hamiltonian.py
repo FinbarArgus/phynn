@@ -69,8 +69,9 @@ class HNN1DWaveSeparable(nn.Module):
 
         return -dH_dp_dx, -dH_dq_dx
 
-    def forward_wgrads(self, x, q, p, dq_dx, dp_dx):
+    def forward_wgrads(self, x, q, p):
         """This function calculates y_hat = (q_dot_hat, p_dot_hat) = (dH_dp_dx, -dH_dq_dx)
+        and y_hat_dot = (dq_dx_dot_hat, dp_dx_dot_hat) = (dH_dp_dx_dx, -dH_dq_dx_dx)
         """
         grads = self.forward(x, q, p, detach=False)
         dH_dp_dx = -grads[0]
@@ -80,8 +81,6 @@ class HNN1DWaveSeparable(nn.Module):
             x = x.requires_grad_(True)
             q = q.requires_grad_(True)
             p = p.requires_grad_(True)
-            dq_dx = dq_dx.requires_grad_(True)
-            dp_dx = dp_dx.requires_grad_(True)
 
             dH_dq_dx_dx_list = []
             dH_dp_dx_dx_list = []
