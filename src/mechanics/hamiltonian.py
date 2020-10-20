@@ -69,9 +69,9 @@ class HNN1DWaveSeparable(nn.Module):
 
         return -dH_dp_dx, -dH_dq_dx
 
-    def forward_wgrads(self, x, q, p):
-        """This function calculates y_hat = (q_dot_hat, p_dot_hat) = (dH_dp_dx, -dH_dq_dx)
-        and y_hat_dot = (dq_dx_dot_hat, dp_dx_dot_hat) = (dH_dp_dx_dx, -dH_dq_dx_dx)
+    def forward_wgrads(self, x, q, p, detach=False):
+        """This function calculates y_hat = (q_dot_hat, p_dot_hat) = (-dH_dp_dx, -dH_dq_dx)
+        and y_hat_dot = (dq_dx_dot_hat, dp_dx_dot_hat) = (-dH_dp_dx_dx, -dH_dq_dx_dx)
         """
         grads = self.forward(x, q, p, detach=False)
         dH_dp_dx = -grads[0]
@@ -79,19 +79,21 @@ class HNN1DWaveSeparable(nn.Module):
 
         with torch.set_grad_enabled(True):
             x = x.requires_grad_(True)
-            q = q.requires_grad_(True)
-            p = p.requires_grad_(True)
 
-            dH_dq_dx_dx_list = []
-            dH_dp_dx_dx_list = []
+            dH_dq_dx_dx = torch.Tensor(len(x), len(x[0])).to(x)
+            dH_dp_dx_dx = torch.Tensor(len(x), len(x[0])).to(x)
 
-            for x_idx, (dH_dq_dx_entry, dH_dp_dx_entry) in enumerate(zip(dH_dq_dx, dH_dp_dx)):
-                dH_dq_dx_entry = torch.autograd.grad(dH_dq_dx_entry, x, allow_unused=False, create_graph=True)[0][x_idx]
-                dH_dp_dx_entry = torch.autograd.grad(dH_dp_dx_entry, x, allow_unused=False, create_graph=True)[0][x_idx]
-                dH_dq_dx_dx_list.append(dH_dq_dx_entry)
-                dH_dp_dx_dx_list.append(dH_dp_dx_entry)
+            for x_idx in range(len(dH_dq_dx[0])):
+                dH_dq_dx_dx[:, x_idx] = torch.autograd.grad(dH_dq_dx[:, x_idx].sum(), x,
+                                      allow_unused=False, create_graph=True)[0][:, x_idx]
+                dH_dp_dx_dx[:, x_idx] = torch.autograd.grad(dH_dp_dx[:, x_idx].sum(), x,
+                                      allow_unused=False, create_graph=True)[0][:, x_idx]
 
-            dH_dq_dx_dx = torch.stack(dH_dq_dx_dx_list)
-            dH_dp_dx_dx = torch.stack(dH_dp_dx_dx_list)
+            if detach:
+                dH_dq_dx = dH_dq_dx.detach()
+                dH_dp_dx = dH_dp_dx.detach()
+                dH_dq_dx_dx = dH_dq_dx.detach()
+                dH_dp_dx_dx = dH_dp_dx.detach()
 
-        return -dH_dp_dx.detach(), -dH_dq_dx.detach(), -dH_dp_dx_dx.detach(), -dH_dq_dx_dx.detach()
+
+        return -dH_dp_dx, -dH_dq_dx, -dH_dp_dx_dx, -dH_dq_dx_dx

@@ -58,16 +58,24 @@ class Learner(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         batch_size = len(batch[0])
 
+        # Note: training with gradients slows down training to a crawl
+        train_wgrads = False
+
         # get input data and add noise
         x = batch[0]
-        q = self.add_gaussian_noise(batch[1], 0.0, 0.1)
-        p = self.add_gaussian_noise(batch[2], 0.0, 0.1)
-        dq_dx = self.add_gaussian_noise(batch[3], 0.0, 0.1)
-        dp_dx =  self.add_gaussian_noise(batch[4], 0.0, 0.1)
+        q = self.add_gaussian_noise(batch[1], 0.0, 0.05)
+        p = self.add_gaussian_noise(batch[2], 0.0, 0.05)
+        dq_dx = self.add_gaussian_noise(batch[3], 0.0, 0.05)
+        dp_dx =  self.add_gaussian_noise(batch[4], 0.0, 0.05)
 
 
         # Calculate y_hat = (q_dot_hat, p_dot_hat) from the gradient of the HNN
-        q_dot_hat, p_dot_hat = self.model.de_function(0, x, q, p)
+        if train_wgrads:
+            q_dot_hat, p_dot_hat, dq_dx_dot_hat, dp_dx_dot_hat = self.model.de_function(0, x, q, p,
+                                                                                        train_wgrads=True)
+        else:
+            q_dot_hat, p_dot_hat = self.model.de_function(0, x, q, p)
+
         y_hat = torch.cat([q_dot_hat, p_dot_hat], dim=1)
         # Calculate the y = (q_dot, p_dot) from the governing equations
         q_dot, p_dot = self.calculate_f(x, dq_dx, dp_dx)
@@ -76,11 +84,12 @@ class Learner(pl.LightningModule):
         p_dot[:, 0:self.num_boundary] = 0
         p_dot[:, -1*self.num_boundary:] = 0
         y = torch.cat([q_dot, p_dot], dim=1)
-        # set the boundary q_dot and p_dot to zero
-        # TODO create an apply_boundary_conditions function
-        # TODO make sure I am setting the correct numbers to zero here
 
         loss = self.loss(y_hat, y, batch_size)
+        # add the spatial gradients to the loss function to make them smooth
+        if train_wgrads:
+            grad_scale = 10/batch_size
+            loss += grad_scale*(dq_dx_dot_hat.sum() + dp_dx_dot_hat.sum())
         logs = {'train_loss': loss}
 
         #if epoch is a multiple of specified number then save the model
@@ -133,13 +142,19 @@ def separable_hnn(num_points, input_h_s=None, input_model=None,
             nn.Tanh(),
             nn.Linear(20, 1),
             nn.Dropout(0.2))).to(device)
+        for m in h_s.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_normal_(m.weight, gain=nn.init.calculate_gain('tanh'))
+                nn.init.zeros_(m.bias)
+
         model = DENNet(h_s, case='1DWave').to(device)
+
 
     if train:
         learn_sep = Learner(model, num_boundary=num_boundary, save_path=save_path,
                             epoch_save=epoch_save)
         logger = TensorBoardLogger('separable_logs')
-        trainer_sep = pl.Trainer(min_epochs=0, max_epochs=0, logger=logger, gpus=1)
+        trainer_sep = pl.Trainer(min_epochs=2001, max_epochs=2001, logger=logger, gpus=1)
         trainer_sep.fit(learn_sep)
 
     return h_s, model
@@ -160,10 +175,10 @@ if __name__ == '__main__':
 
     # Training conditions
     num_train_samples = 1
-    num_train_xCoords = 60
+    num_train_xCoords = 200
     num_tSteps_training = 1
-    num_boundary = 5
-    num_datasets = 8192
+    num_boundary = 10
+    num_datasets = 8096
     batch_size = 1024
     # Training initial conditions [q, p, dq/dx, dp/dx, x]
     x_coord = torch.zeros(num_datasets, num_train_xCoords).to(device)
@@ -202,10 +217,10 @@ if __name__ == '__main__':
     dq_dx_test = -amplitude_q_test*np.pi ** 2 * torch.sin(np.pi * x_coord_test).to(device)
     dp_dx_test = torch.zeros(1, num_train_xCoords).to(device)
     # Testing time span
-    t_span_test = torch.linspace(0, 0.2, 40).to(device)
+    t_span_test = torch.linspace(0, 2.0, 400).to(device)
 
     # bool to determine if model is loaded
-    load_model = True
+    load_model = False
 
     # Wrap in for loop and change inputs to the stepped forward p's and q's
     for tStep in range(num_tSteps_training):

@@ -19,12 +19,15 @@ class Diffeq1DWave(nn.Module):
         self._sensitivity = None
         self._dxds = None
 
-    def forward(self, s, x, q, p):
+    def forward(self, s, x, q, p, train_wgrads=False):
         self.nfe += 1
 
         if self.order > 1:
             None  # TODO
         else:
-            x = self.func(x, q, p)
+            if train_wgrads:
+                x = self.func.forward_wgrads(x, q, p)
+            else:
+                x = self.func(x, q, p)
         self._dxds = x
         return x
