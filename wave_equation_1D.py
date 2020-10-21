@@ -65,10 +65,10 @@ class Learner(pl.LightningModule):
 
         # get input data and add noise
         x = batch[0]
-        q = self.add_gaussian_noise(batch[1], 0.0, 0.05)
-        p = self.add_gaussian_noise(batch[2], 0.0, 0.05)
-        dq_dx = self.add_gaussian_noise(batch[3], 0.0, 0.05)
-        dp_dx =  self.add_gaussian_noise(batch[4], 0.0, 0.05)
+        q = self.add_gaussian_noise(batch[1], 0.0, 0.1)
+        p = self.add_gaussian_noise(batch[2], 0.0, 0.1)
+        dq_dx = self.add_gaussian_noise(batch[3], 0.0, 0.1)
+        dp_dx =  self.add_gaussian_noise(batch[4], 0.0, 0.1)
 
 
         # Calculate y_hat = (q_dot_hat, p_dot_hat) from the gradient of the HNN
@@ -86,7 +86,7 @@ class Learner(pl.LightningModule):
         loss = self.loss(y_hat, y, batch_size)
         # add the spatial gradients to the loss function to make them smooth
         if train_wgrads:
-            grad_scale = 0.01/batch_size
+            grad_scale = 0.007/batch_size
             q_dot_diff_approx = torch.abs((q_dot_hat[:, self.num_boundary + 1:-self.num_boundary] -
                                  q_dot_hat[:, self.num_boundary:-self.num_boundary-1]) / \
                                 (x[:, self.num_boundary + 1:-self.num_boundary] -
@@ -166,7 +166,7 @@ def separable_hnn(num_points, input_h_s=None, input_model=None,
         learn_sep = Learner(model, num_boundary=num_boundary, save_path=save_path,
                             epoch_save=epoch_save)
         logger = TensorBoardLogger('separable_logs')
-        trainer_sep = pl.Trainer(min_epochs=1001, max_epochs=1001, logger=logger, gpus=1)
+        trainer_sep = pl.Trainer(min_epochs=2001, max_epochs=2001, logger=logger, gpus=1)
         trainer_sep.fit(learn_sep)
 
     return h_s, model
@@ -221,10 +221,10 @@ if __name__ == '__main__':
 
     # Testing conditions
     # temporarily test with the same as one of the training init conditions
-    x_coord_test = x_coord[0:1, :]
-    # x_coord_test = torch.zeros(1, num_train_xCoords).to(device)
-    # x_coord_test[:1, num_boundary-1:-num_boundary+1] = torch.linspace(0, 1.0, num_train_xCoords-num_boundary)
-    # x_coord_test[:1, -num_boundary:] = 1.0
+    # x_coord_test = x_coord[0:1, :]
+    x_coord_test = torch.zeros(1, num_train_xCoords).to(device)
+    x_coord_test[:1, num_boundary-1:-num_boundary+1] = torch.linspace(0, 1.0, num_train_xCoords-num_boundary)
+    x_coord_test[:1, -num_boundary:] = 1.0
     amplitude_q_test = 0.5
     #x_coord_test = torch.rand(num_train_xCoords).to(device)
     q_test = amplitude_q_test * np.pi * torch.cos(np.pi * x_coord_test).to(device)
@@ -235,8 +235,8 @@ if __name__ == '__main__':
     t_span_test = torch.linspace(0, 2.0, 400).to(device)
 
     # bool to determine if model is loaded
-    load_model = False
-    do_train = True
+    load_model = True
+    do_train = False
 
     # Wrap in for loop and change inputs to the stepped forward p's and q's
     for tStep in range(num_tSteps_training):
