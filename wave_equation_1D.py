@@ -29,6 +29,7 @@ class Learner(pl.LightningModule):
         super().__init__()
         self.model = model
         self.c = 0
+        self.eps = 1e-9
         self.num_boundary = num_boundary
         self.clockTime = time.process_time()
         self.save_path = save_path
@@ -59,7 +60,8 @@ class Learner(pl.LightningModule):
         batch_size = len(batch[0])
 
         # Note: training with gradients slows down training to a crawl
-        train_wgrads = False
+        train_wgrads = True
+        train_wH = False
 
         # get input data and add noise
         x = batch[0]
@@ -70,11 +72,7 @@ class Learner(pl.LightningModule):
 
 
         # Calculate y_hat = (q_dot_hat, p_dot_hat) from the gradient of the HNN
-        if train_wgrads:
-            q_dot_hat, p_dot_hat, dq_dx_dot_hat, dp_dx_dot_hat = self.model.de_function(0, x, q, p,
-                                                                                        train_wgrads=True)
-        else:
-            q_dot_hat, p_dot_hat = self.model.de_function(0, x, q, p)
+        q_dot_hat, p_dot_hat, H_old = self.model.de_function(0, x, q, p)
 
         y_hat = torch.cat([q_dot_hat, p_dot_hat], dim=1)
         # Calculate the y = (q_dot, p_dot) from the governing equations
@@ -88,8 +86,22 @@ class Learner(pl.LightningModule):
         loss = self.loss(y_hat, y, batch_size)
         # add the spatial gradients to the loss function to make them smooth
         if train_wgrads:
-            grad_scale = 10/batch_size
-            loss += grad_scale*(dq_dx_dot_hat.sum() + dp_dx_dot_hat.sum())
+            grad_scale = 0.01/batch_size
+            q_dot_diff_approx = torch.abs((q_dot_hat[:, self.num_boundary + 1:-self.num_boundary] -
+                                 q_dot_hat[:, self.num_boundary:-self.num_boundary-1]) / \
+                                (x[:, self.num_boundary + 1:-self.num_boundary] -
+                                 x[:, self.num_boundary:-self.num_boundary-1] + self.eps))
+            p_dot_diff_approx = torch.abs((p_dot_hat[:, self.num_boundary + 1:-self.num_boundary] -
+                                           p_dot_hat[:, self.num_boundary:-self.num_boundary-1]) / \
+                                          (x[:, self.num_boundary + 1:-self.num_boundary] -
+                                           x[:, self.num_boundary:-self.num_boundary-1] + self.eps))
+            loss += grad_scale*(q_dot_diff_approx.sum() + p_dot_diff_approx.sum())
+        if train_wH:
+            pass
+            # loss +=
+            # H_old = self.model.de_function.func.H(torch.cat([x, q, p]), dim=1)
+            # H_new = self.model.de_function.func.H(torch.cat([x, q, p]), dim=1)
+            # loss += (H_new - H_old).sum()
         logs = {'train_loss': loss}
 
         #if epoch is a multiple of specified number then save the model
@@ -106,7 +118,7 @@ class Learner(pl.LightningModule):
         return {'loss': loss, 'log': logs}
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.model.parameters(), lr=0.0006, weight_decay=0.02)
+        return torch.optim.Adam(self.model.parameters(), lr=0.0006, weight_decay=0.01)
 
     @staticmethod
     def train_dataloader():
@@ -154,7 +166,7 @@ def separable_hnn(num_points, input_h_s=None, input_model=None,
         learn_sep = Learner(model, num_boundary=num_boundary, save_path=save_path,
                             epoch_save=epoch_save)
         logger = TensorBoardLogger('separable_logs')
-        trainer_sep = pl.Trainer(min_epochs=2001, max_epochs=2001, logger=logger, gpus=1)
+        trainer_sep = pl.Trainer(min_epochs=1001, max_epochs=1001, logger=logger, gpus=1)
         trainer_sep.fit(learn_sep)
 
     return h_s, model
@@ -175,11 +187,11 @@ if __name__ == '__main__':
 
     # Training conditions
     num_train_samples = 1
-    num_train_xCoords = 200
+    num_train_xCoords = 20
     num_tSteps_training = 1
-    num_boundary = 10
-    num_datasets = 8096
-    batch_size = 1024
+    num_boundary = 2
+    num_datasets = 32768
+    batch_size = 8192
     # Training initial conditions [q, p, dq/dx, dp/dx, x]
     x_coord = torch.zeros(num_datasets, num_train_xCoords).to(device)
     x_coord[:, num_boundary:-1*num_boundary] = torch.rand(num_datasets, num_train_xCoords-num_boundary*2).sort()[0]
@@ -210,6 +222,9 @@ if __name__ == '__main__':
     # Testing conditions
     # temporarily test with the same as one of the training init conditions
     x_coord_test = x_coord[0:1, :]
+    # x_coord_test = torch.zeros(1, num_train_xCoords).to(device)
+    # x_coord_test[:1, num_boundary-1:-num_boundary+1] = torch.linspace(0, 1.0, num_train_xCoords-num_boundary)
+    # x_coord_test[:1, -num_boundary:] = 1.0
     amplitude_q_test = 0.5
     #x_coord_test = torch.rand(num_train_xCoords).to(device)
     q_test = amplitude_q_test * np.pi * torch.cos(np.pi * x_coord_test).to(device)
@@ -221,6 +236,7 @@ if __name__ == '__main__':
 
     # bool to determine if model is loaded
     load_model = False
+    do_train = True
 
     # Wrap in for loop and change inputs to the stepped forward p's and q's
     for tStep in range(num_tSteps_training):
@@ -246,7 +262,7 @@ if __name__ == '__main__':
         if tStep == 0 and not load_model:
             separable, separable_model = separable_hnn(num_train_xCoords, save_path=save_path,
                                                        epoch_save=epoch_save)
-        else:
+        elif do_train:
             separable, separable_model = separable_hnn(num_train_xCoords,
                                                        input_h_s=separable, input_model=separable_model,
                                                        save_path=save_path, epoch_save=epoch_save)
@@ -289,7 +305,7 @@ if __name__ == '__main__':
     ax.set_xlim(0, 1)
     ax.set_ylim(-2, 2)
     ax2.set_xlim(0, t_span_test[-1])
-    ax2.set_ylim(-100, 100)
+    ax2.set_ylim(-50, 50)
     ax.set_xlabel('x [m]')
     ax2.set_xlabel('t [s]')
     ax2.set_ylabel('Hamiltonian [J]')
@@ -297,6 +313,7 @@ if __name__ == '__main__':
     line2, = ax.plot([], [], label='p', lw=3, color='r')
     line3, = ax2.plot([], [], lw=3, color='k')
     ax.legend()
+    fig.tight_layout(pad=1.0)
 
     def init():
         line.set_data([], [])
@@ -316,7 +333,7 @@ if __name__ == '__main__':
     #plt.show()
     writer = LoopingPillowWriter(fps=20)
     # TODO change name for saved animation
-    anim.save('tanh_1d_wave_V4.gif', writer=writer)
+    anim.save('tanh_1d_wave_V6.gif', writer=writer)
 
 
 

@@ -47,9 +47,11 @@ class HNN1DWaveSeparable(nn.Module):
             q = q.requires_grad_(True)
             p = p.requires_grad_(True)
 
-            dH_dq = torch.autograd.grad(self.H(torch.cat([x, q, p], dim=1)).sum(), q, allow_unused=False,
+            H = self.H(torch.cat([x, q, p], dim=1))
+
+            dH_dq = torch.autograd.grad(H.sum(), q, allow_unused=False,
                                         create_graph=True)[0]
-            dH_dp = torch.autograd.grad(self.H(torch.cat([x, q, p], dim=1)).sum(), p, allow_unused=False,
+            dH_dp = torch.autograd.grad(H.sum(), p, allow_unused=False,
                                         create_graph=True)[0]
 
             dH_dq_dx = torch.Tensor(len(x), len(x[0])).to(x)
@@ -66,8 +68,9 @@ class HNN1DWaveSeparable(nn.Module):
             if detach:
                 dH_dq_dx = dH_dq_dx.detach()
                 dH_dp_dx = dH_dp_dx.detach()
+                H = H.detach()
 
-        return -dH_dp_dx, -dH_dq_dx
+        return -dH_dp_dx, -dH_dq_dx, H
 
     def forward_wgrads(self, x, q, p, detach=False):
         """This function calculates y_hat = (q_dot_hat, p_dot_hat) = (-dH_dp_dx, -dH_dq_dx)
@@ -76,6 +79,7 @@ class HNN1DWaveSeparable(nn.Module):
         grads = self.forward(x, q, p, detach=False)
         dH_dp_dx = -grads[0]
         dH_dq_dx = -grads[1]
+        H = grads[2]
 
         with torch.set_grad_enabled(True):
             x = x.requires_grad_(True)
@@ -96,4 +100,4 @@ class HNN1DWaveSeparable(nn.Module):
                 dH_dp_dx_dx = dH_dp_dx.detach()
 
 
-        return -dH_dp_dx, -dH_dq_dx, -dH_dp_dx_dx, -dH_dq_dx_dx
+        return -dH_dp_dx, -dH_dq_dx, -dH_dp_dx_dx, -dH_dq_dx_dx, H
