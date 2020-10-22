@@ -25,7 +25,7 @@ class LoopingPillowWriter(PillowWriter):
 
 class Learner(pl.LightningModule):
     def __init__(self, model: nn.Module, num_boundary=1, save_path='temp_save_path',
-                 epoch_save=100):
+                 epoch_save=100, dt=0.01):
         super().__init__()
         self.model = model
         self.c = 0
@@ -34,6 +34,7 @@ class Learner(pl.LightningModule):
         self.clockTime = time.process_time()
         self.save_path = save_path
         self.epoch_save = epoch_save
+        self.dt=dt
 
     def forward(self, x):
         return self.model.de_function(0, x)
@@ -60,19 +61,19 @@ class Learner(pl.LightningModule):
         batch_size = len(batch[0])
 
         # Note: training with gradients slows down training to a crawl
-        train_wgrads = True
-        train_wH = False
+        train_wgrads = False
+        train_wH = True
 
         # get input data and add noise
         x = batch[0]
-        q = self.add_gaussian_noise(batch[1], 0.0, 0.1)
-        p = self.add_gaussian_noise(batch[2], 0.0, 0.1)
-        dq_dx = self.add_gaussian_noise(batch[3], 0.0, 0.1)
-        dp_dx =  self.add_gaussian_noise(batch[4], 0.0, 0.1)
+        q = self.add_gaussian_noise(batch[1], 0.0, 0.05)
+        p = self.add_gaussian_noise(batch[2], 0.0, 0.05)
+        dq_dx = self.add_gaussian_noise(batch[3], 0.0, 0.05)
+        dp_dx =  self.add_gaussian_noise(batch[4], 0.0, 0.05)
 
 
         # Calculate y_hat = (q_dot_hat, p_dot_hat) from the gradient of the HNN
-        q_dot_hat, p_dot_hat, H_old = self.model.de_function(0, x, q, p)
+        q_dot_hat, p_dot_hat, _ = self.model.de_function(0, x, q, p)
 
         y_hat = torch.cat([q_dot_hat, p_dot_hat], dim=1)
         # Calculate the y = (q_dot, p_dot) from the governing equations
@@ -83,8 +84,10 @@ class Learner(pl.LightningModule):
         p_dot[:, -1*self.num_boundary:] = 0
         y = torch.cat([q_dot, p_dot], dim=1)
 
-        loss = self.loss(y_hat, y, batch_size)
+        loss_main = self.loss(y_hat, y, batch_size)
         # add the spatial gradients to the loss function to make them smooth
+        loss_grads = 0
+        loss_H_const = 0
         if train_wgrads:
             grad_scale = 0.007/batch_size
             q_dot_diff_approx = torch.abs((q_dot_hat[:, self.num_boundary + 1:-self.num_boundary] -
@@ -95,14 +98,17 @@ class Learner(pl.LightningModule):
                                            p_dot_hat[:, self.num_boundary:-self.num_boundary-1]) / \
                                           (x[:, self.num_boundary + 1:-self.num_boundary] -
                                            x[:, self.num_boundary:-self.num_boundary-1] + self.eps))
-            loss += grad_scale*(q_dot_diff_approx.sum() + p_dot_diff_approx.sum())
+            loss_grads += grad_scale*(q_dot_diff_approx.sum() + p_dot_diff_approx.sum())
         if train_wH:
-            pass
-            # loss +=
-            # H_old = self.model.de_function.func.H(torch.cat([x, q, p]), dim=1)
-            # H_new = self.model.de_function.func.H(torch.cat([x, q, p]), dim=1)
-            # loss += (H_new - H_old).sum()
-        logs = {'train_loss': loss}
+            H_train_scale = 0.03/(self.dt*batch_size)
+            time_integrator = TimeIntegrator(self.model.de_function.func).to(device)
+            # TODO should i include noise here?
+            q_new, p_new, H_old = time_integrator.sv_step(x, q, p, self.dt)
+            H_new = self.model.de_function.func.H(torch.cat([x, q_new, p_new], dim=1))
+            loss_H_const += H_train_scale*abs(H_new - H_old).sum()
+        loss = loss_main + loss_grads + loss_H_const
+        logs = {'train_loss': loss, 'loss_main': loss_main,
+                'loss_grads': loss_grads, 'loss_H':loss_H_const}
 
         #if epoch is a multiple of specified number then save the model
         if self.current_epoch != 0 and self.current_epoch%self.epoch_save == 0 and batch_idx == 0:
@@ -118,7 +124,7 @@ class Learner(pl.LightningModule):
         return {'loss': loss, 'log': logs}
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.model.parameters(), lr=0.0006, weight_decay=0.01)
+        return torch.optim.Adam(self.model.parameters(), lr=0.0007, weight_decay=0.01)
 
     @staticmethod
     def train_dataloader():
@@ -126,7 +132,7 @@ class Learner(pl.LightningModule):
 
 
 def separable_hnn(num_points, input_h_s=None, input_model=None,
-                  save_path='temp_save_path', train=True, epoch_save=100):
+                  save_path='temp_save_path', train=True, epoch_save=100, dt=0.01):
     """
     Separable Hamiltonian network.
 
@@ -153,7 +159,8 @@ def separable_hnn(num_points, input_h_s=None, input_model=None,
             nn.Dropout(0.2),
             nn.Tanh(),
             nn.Linear(20, 1),
-            nn.Dropout(0.2))).to(device)
+            nn.Dropout(0.2),
+            nn.Softplus())).to(device)
         for m in h_s.modules():
             if isinstance(m, nn.Linear):
                 nn.init.xavier_normal_(m.weight, gain=nn.init.calculate_gain('tanh'))
@@ -164,7 +171,7 @@ def separable_hnn(num_points, input_h_s=None, input_model=None,
 
     if train:
         learn_sep = Learner(model, num_boundary=num_boundary, save_path=save_path,
-                            epoch_save=epoch_save)
+                            epoch_save=epoch_save, dt=dt)
         logger = TensorBoardLogger('separable_logs')
         trainer_sep = pl.Trainer(min_epochs=2001, max_epochs=2001, logger=logger, gpus=1)
         trainer_sep.fit(learn_sep)
@@ -190,7 +197,7 @@ if __name__ == '__main__':
     num_train_xCoords = 20
     num_tSteps_training = 1
     num_boundary = 2
-    num_datasets = 32768
+    num_datasets = 65536
     batch_size = 8192
     # Training initial conditions [q, p, dq/dx, dp/dx, x]
     x_coord = torch.zeros(num_datasets, num_train_xCoords).to(device)
@@ -217,7 +224,7 @@ if __name__ == '__main__':
     # ]).to(device)
     # X_euler = X_sv
     # Training time step
-    dt_train = 0.01
+    dt_train = 0.001
 
     # Testing conditions
     # temporarily test with the same as one of the training init conditions
@@ -235,8 +242,8 @@ if __name__ == '__main__':
     t_span_test = torch.linspace(0, 2.0, 400).to(device)
 
     # bool to determine if model is loaded
-    load_model = True
-    do_train = False
+    load_model = False
+    do_train = True
 
     # Wrap in for loop and change inputs to the stepped forward p's and q's
     for tStep in range(num_tSteps_training):
@@ -260,12 +267,15 @@ if __name__ == '__main__':
             print('loaded model at epoch {} from {}'.format(epoch, save_path))
 
         if tStep == 0 and not load_model:
-            separable, separable_model = separable_hnn(num_train_xCoords, save_path=save_path,
-                                                       epoch_save=epoch_save)
+            if do_train:
+                separable, separable_model = separable_hnn(num_train_xCoords, save_path=save_path,
+                                                           epoch_save=epoch_save, dt=dt_train)
+            else:
+                print('currently not loading a model and not training, WHAT are you doing?')
         elif do_train:
             separable, separable_model = separable_hnn(num_train_xCoords,
                                                        input_h_s=separable, input_model=separable_model,
-                                                       save_path=save_path, epoch_save=epoch_save)
+                                                       save_path=save_path, epoch_save=epoch_save, dt=dt_train)
 
         # set up time integrator that uses our HNN
         # time_integrator_euler = TimeIntegrator(hamiltonian).to(device)
@@ -305,7 +315,7 @@ if __name__ == '__main__':
     ax.set_xlim(0, 1)
     ax.set_ylim(-2, 2)
     ax2.set_xlim(0, t_span_test[-1])
-    ax2.set_ylim(-50, 50)
+    ax2.set_ylim(-10, 100)
     ax.set_xlabel('x [m]')
     ax2.set_xlabel('t [s]')
     ax2.set_ylabel('Hamiltonian [J]')
