@@ -242,8 +242,8 @@ if __name__ == '__main__':
     t_span_test = torch.linspace(0, 2.0, 400).to(device)
 
     # bool to determine if model is loaded
-    load_model = False
-    do_train = True
+    load_model = True
+    do_train = False
 
     # Wrap in for loop and change inputs to the stepped forward p's and q's
     for tStep in range(num_tSteps_training):
