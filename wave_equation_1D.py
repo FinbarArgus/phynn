@@ -61,7 +61,7 @@ class Learner(pl.LightningModule):
         batch_size = len(batch[0])
 
         # Note: training with gradients slows down training to a crawl
-        train_wgrads = False
+        train_wgrads = True
         train_wH = True
 
         # get input data and add noise
@@ -89,7 +89,7 @@ class Learner(pl.LightningModule):
         loss_grads = 0
         loss_H_const = 0
         if train_wgrads:
-            grad_scale = 0.007/batch_size
+            grad_scale = 0.005/batch_size
             q_dot_diff_approx = torch.abs((q_dot_hat[:, self.num_boundary + 1:-self.num_boundary] -
                                  q_dot_hat[:, self.num_boundary:-self.num_boundary-1]) / \
                                 (x[:, self.num_boundary + 1:-self.num_boundary] -
@@ -143,22 +143,22 @@ def separable_hnn(num_points, input_h_s=None, input_model=None,
         model = input_model
     else:
         h_s = HNN1DWaveSeparable(nn.Sequential(
-            nn.Linear(3*num_points, 20),
+            nn.Linear(3*num_points, 40),
             nn.Dropout(0.2),
             nn.Tanh(),
-            nn.Linear(20, 20),
+            nn.Linear(40, 40),
             nn.Dropout(0.2),
             nn.Tanh(),
-            nn.Linear(20, 20),
+            nn.Linear(40, 30),
             nn.Dropout(0.2),
             nn.Tanh(),
-            nn.Linear(20, 20),
+            nn.Linear(30, 20),
             nn.Dropout(0.2),
             nn.Tanh(),
-            nn.Linear(20, 20),
+            nn.Linear(20, 10),
             nn.Dropout(0.2),
             nn.Tanh(),
-            nn.Linear(20, 1),
+            nn.Linear(10, 1),
             nn.Dropout(0.2),
             nn.Softplus())).to(device)
         for m in h_s.modules():
@@ -315,7 +315,7 @@ if __name__ == '__main__':
     ax.set_xlim(0, 1)
     ax.set_ylim(-2, 2)
     ax2.set_xlim(0, t_span_test[-1])
-    ax2.set_ylim(-10, 100)
+    ax2.set_ylim(-10, 10)
     ax.set_xlabel('x [m]')
     ax2.set_xlabel('t [s]')
     ax2.set_ylabel('Hamiltonian [J]')
