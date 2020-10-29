@@ -239,7 +239,7 @@ if __name__ == '__main__':
     dq_dx_test = -amplitude_q_test*np.pi ** 2 * torch.sin(np.pi * x_coord_test).to(device)
     dp_dx_test = torch.zeros(1, num_train_xCoords).to(device)
     # Testing time span
-    t_span_test = torch.linspace(0, 2.0, 400).to(device)
+    t_span_test = torch.linspace(0, 8.0, 1600).to(device)
 
     # bool to determine if model is loaded
     load_model = True
@@ -310,18 +310,23 @@ if __name__ == '__main__':
     p_traj = p_traj.detach().cpu()
     H_traj = H_traj.detach().cpu()
 
-    fig, (ax, ax2) = plt.subplots(2, 1)
+    fig, (ax, ax2, ax3) = plt.subplots(3, 1, gridspec_kw={'height_ratios': [1, 1, 2]}, figsize=(5, 8))
 
     ax.set_xlim(0, 1)
     ax.set_ylim(-2, 2)
     ax2.set_xlim(0, t_span_test[-1])
     ax2.set_ylim(-10, 10)
+    ax3.set_xlim(-2, 2)
+    ax3.set_ylim(-2, 2)
     ax.set_xlabel('x [m]')
     ax2.set_xlabel('t [s]')
     ax2.set_ylabel('Hamiltonian [J]')
+    ax2.set_xlabel('q')
+    ax2.set_ylabel('p [m/s]')
     line, = ax.plot([], [], label='q', lw=3)
     line2, = ax.plot([], [], label='p', lw=3, color='r')
     line3, = ax2.plot([], [], lw=3, color='k')
+    line4, = ax3.plot([], [], lw=1, color='g')
     ax.legend()
     fig.tight_layout(pad=1.0)
 
@@ -329,6 +334,7 @@ if __name__ == '__main__':
         line.set_data([], [])
         line2.set_data([], [])
         line3.set_data([], [])
+        line4.set_data([], [])
         return line,
 
 
@@ -336,6 +342,7 @@ if __name__ == '__main__':
         line.set_data(x_coord_test[0], q_traj[0, :, i])
         line2.set_data(x_coord_test[0], p_traj[0, :, i])
         line3.set_data(t_span_test[0:i], H_traj[0:i])
+        line4.set_data(q_traj[0, 5, 0:i], p_traj[0, 5, 0:i])
         return line, line2, line3
 
 
