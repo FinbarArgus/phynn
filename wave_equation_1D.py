@@ -61,7 +61,7 @@ class Learner(pl.LightningModule):
         batch_size = len(batch[0])
 
         # Note: training with gradients slows down training to a crawl
-        train_wgrads = True
+        train_wgradApprox = True
         train_wH = True
 
         # get input data and add noise
@@ -88,7 +88,7 @@ class Learner(pl.LightningModule):
         # add the spatial gradients to the loss function to make them smooth
         loss_grads = 0
         loss_H_const = 0
-        if train_wgrads:
+        if train_wgradApprox:
             grad_scale = 0.005/batch_size
             q_dot_diff_approx = torch.abs((q_dot_hat[:, self.num_boundary + 1:-self.num_boundary] -
                                  q_dot_hat[:, self.num_boundary:-self.num_boundary-1]) / \
@@ -239,7 +239,7 @@ if __name__ == '__main__':
     dq_dx_test = -amplitude_q_test*np.pi ** 2 * torch.sin(np.pi * x_coord_test).to(device)
     dp_dx_test = torch.zeros(1, num_train_xCoords).to(device)
     # Testing time span
-    t_span_test = torch.linspace(0, 8.0, 1600).to(device)
+    t_span_test = torch.linspace(0, 5.0, 1000).to(device)
 
     # bool to determine if model is loaded
     load_model = True
@@ -321,8 +321,8 @@ if __name__ == '__main__':
     ax.set_xlabel('x [m]')
     ax2.set_xlabel('t [s]')
     ax2.set_ylabel('Hamiltonian [J]')
-    ax2.set_xlabel('q')
-    ax2.set_ylabel('p [m/s]')
+    ax3.set_xlabel('q')
+    ax3.set_ylabel('p [m/s]')
     line, = ax.plot([], [], label='q', lw=3)
     line2, = ax.plot([], [], label='p', lw=3, color='r')
     line3, = ax2.plot([], [], lw=3, color='k')
