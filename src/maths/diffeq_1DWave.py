@@ -1,25 +1,24 @@
 import torch.nn as nn
+import copy
 
 
 class Diffeq1DWave(nn.Module):
     """
-    A wrapper for differential equations. Currently this class supports only DEs of order 1.
+    A wrapper for differential equations.
 
-    TODO: Support for higher order DEs.
     """
 
     def __init__(self, func, order=1):
         super().__init__()
-        # TODO(Finbar) the name model is overused maybe change this to func, like in the
-        # TODO parent process
         self.func = func
+        self.funcH = copy.deepcopy(func)
         self.nfe = 0.  # number of function evaluations.
         self.order = order
         self._intloss = None
         self._sensitivity = None
         self._dxds = None
 
-    def forward(self, s, x, q, p, train_wgrads=False):
+    def forward(self, s, x, q, p, H_cons_net=False, train_wgrads=False):
         self.nfe += 1
 
         if self.order > 1:
@@ -28,6 +27,16 @@ class Diffeq1DWave(nn.Module):
             if train_wgrads:
                 x = self.func.forward_wgrads(x, q, p)
             else:
-                x = self.func(x, q, p)
+                if H_cons_net:
+                    x = self.funcH(x, q, p)
+                else:
+                    x = self.func(x, q, p)
+
         self._dxds = x
         return x
+
+    # TODO use this function
+    def reset_func(self, func):
+        # This function resets both NN funcs to the same NN,
+        self.func = func
+        self.funcH = func

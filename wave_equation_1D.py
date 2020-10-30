@@ -4,6 +4,7 @@ import torch.utils.data as data
 import numpy as np
 
 import pytorch_lightning as pl
+from pytorch_lightning.trainer import training_loop
 from pytorch_lightning.loggers import TensorBoardLogger
 from matplotlib.animation import PillowWriter
 
@@ -23,13 +24,22 @@ class LoopingPillowWriter(PillowWriter):
             self._outfile, save_all=True, append_images=self._frames[1:],
             duration=int(1000 / self.fps), loop=0)
 
+#class Looper(training_loop.TrainerTrainLoopMixin):
+#    def __init__(self):
+#        super(Looper).__init__()
+#
+#    def run_training_batch(self, batch, batch_idx):
+#        print('hi')
+
+
 class Learner(pl.LightningModule):
-    def __init__(self, model: nn.Module, num_boundary=1, save_path='temp_save_path',
-                 epoch_save=100, dt=0.01):
+    def __init__(self, model: nn.Module, train_wHmodel=True, num_boundary=1,
+                 save_path='temp_save_path', epoch_save=100, dt=0.01):
         super().__init__()
         self.model = model
         self.c = 0
         self.eps = 1e-9
+        self.train_wHmodel= train_wHmodel
         self.num_boundary = num_boundary
         self.clockTime = time.process_time()
         self.save_path = save_path
@@ -61,8 +71,12 @@ class Learner(pl.LightningModule):
         batch_size = len(batch[0])
 
         # Note: training with gradients slows down training to a crawl
-        train_wgradApprox = True
-        train_wH = True
+        train_wgradApprox = False
+        train_wH = False
+
+        if train_wH and self.train_wHmodel:
+            print('cant have train_wH and train_wHmodel set to True, quitting')
+            quit()
 
         # get input data and add noise
         x = batch[0]
@@ -88,6 +102,7 @@ class Learner(pl.LightningModule):
         # add the spatial gradients to the loss function to make them smooth
         loss_grads = 0
         loss_H_const = 0
+
         if train_wgradApprox:
             grad_scale = 0.005/batch_size
             q_dot_diff_approx = torch.abs((q_dot_hat[:, self.num_boundary + 1:-self.num_boundary] -
@@ -106,6 +121,17 @@ class Learner(pl.LightningModule):
             q_new, p_new, H_old = time_integrator.sv_step(x, q, p, self.dt)
             H_new = self.model.de_function.func.H(torch.cat([x, q_new, p_new], dim=1))
             loss_H_const += H_train_scale*abs(H_new - H_old).sum()
+
+        if self.train_wHmodel:
+            # Calculate y_hat = (q_dot_hat, p_dot_hat) from the gradient of the HNN
+            # _, _, H_old = self.model.de_function(0, x, q, p, H_cons_net=True)
+            H_train_scale = 0.03/(self.dt*batch_size)
+            time_integrator = TimeIntegrator(self.model.de_function.funcH).to(device)
+            q_new, p_new, H_old = time_integrator.sv_step(x, q, p, self.dt)
+            H_new = self.model.de_function.funcH.H(torch.cat([x, q_new, p_new], dim=1))
+
+            loss_H_const += H_train_scale*abs(H_new - H_old).sum()
+
         loss = loss_main + loss_grads + loss_H_const
         logs = {'train_loss': loss, 'loss_main': loss_main,
                 'loss_grads': loss_grads, 'loss_H':loss_H_const}
@@ -131,7 +157,7 @@ class Learner(pl.LightningModule):
         return trainloader
 
 
-def separable_hnn(num_points, input_h_s=None, input_model=None,
+def separable_hnn(num_points, train_wHmodel=True, input_h_s=None, input_model=None,
                   save_path='temp_save_path', train=True, epoch_save=100, dt=0.01):
     """
     Separable Hamiltonian network.
@@ -170,8 +196,8 @@ def separable_hnn(num_points, input_h_s=None, input_model=None,
 
 
     if train:
-        learn_sep = Learner(model, num_boundary=num_boundary, save_path=save_path,
-                            epoch_save=epoch_save, dt=dt)
+        learn_sep = Learner(model, train_wHmodel=train_wHmodel, num_boundary=num_boundary,
+                            save_path=save_path, epoch_save=epoch_save, dt=dt)
         logger = TensorBoardLogger('separable_logs')
         trainer_sep = pl.Trainer(min_epochs=2001, max_epochs=2001, logger=logger, gpus=1)
         trainer_sep.fit(learn_sep)
@@ -187,7 +213,7 @@ if __name__ == '__main__':
     save_dir = 'saved_models'
     if not os.path.exists(save_dir):
         os.mkdir(save_dir)
-    model_name = 'model_6Layers_20Neurons.pt'
+    model_name = 'model_encoder_soft_share.pt'
     save_path = os.path.join(save_dir, model_name)
     # save every epoch_save epochs
     epoch_save = 50
@@ -239,11 +265,14 @@ if __name__ == '__main__':
     dq_dx_test = -amplitude_q_test*np.pi ** 2 * torch.sin(np.pi * x_coord_test).to(device)
     dp_dx_test = torch.zeros(1, num_train_xCoords).to(device)
     # Testing time span
-    t_span_test = torch.linspace(0, 5.0, 1000).to(device)
+    t_span_test = torch.linspace(0, 1.0, 200).to(device)
 
     # bool to determine if model is loaded
     load_model = True
     do_train = False
+
+    # whether we want to train with a second Hamiltonian model
+    train_wHmodel = True
 
     # Wrap in for loop and change inputs to the stepped forward p's and q's
     for tStep in range(num_tSteps_training):
@@ -254,7 +283,8 @@ if __name__ == '__main__':
         # hamiltonian, basic_model = basic_hnn()
         # load model if required
         if tStep == 0 and load_model:
-            separable, separable_model = separable_hnn(num_train_xCoords, train=False)
+            separable, separable_model = separable_hnn(num_train_xCoords, train_wHmodel=train_wHmodel,
+                                                       train=False)
             # optimizer = TheOptimizerClass(*args, **kwargs)
 
             checkpoint = torch.load(save_path)
@@ -268,12 +298,12 @@ if __name__ == '__main__':
 
         if tStep == 0 and not load_model:
             if do_train:
-                separable, separable_model = separable_hnn(num_train_xCoords, save_path=save_path,
-                                                           epoch_save=epoch_save, dt=dt_train)
+                separable, separable_model = separable_hnn(num_train_xCoords, train_wHmodel=train_wHmodel,
+                                                           save_path=save_path, epoch_save=epoch_save, dt=dt_train)
             else:
                 print('currently not loading a model and not training, WHAT are you doing?')
         elif do_train:
-            separable, separable_model = separable_hnn(num_train_xCoords,
+            separable, separable_model = separable_hnn(num_train_xCoords, train_wHmodel=train_wHmodel,
                                                        input_h_s=separable, input_model=separable_model,
                                                        save_path=save_path, epoch_save=epoch_save, dt=dt_train)
 
@@ -298,17 +328,31 @@ if __name__ == '__main__':
     # time_integrator_euler = TimeIntegrator(hamiltonian).to(device)
     # calculate trajectory with an euler step
     # traj_HNN_Euler = time_integrator_euler.integrate(X_test, t_span_test, method='Euler').detach().cpu()
+    plot_wHmodel = True
 
-    # set up time integrator that uses our separable HNN
-    time_integrator_sv = TimeIntegrator(separable).to(device)
-    # calculate trajectory
-    q_traj, p_traj, H_traj = time_integrator_sv.integrate(x_coord_test, q_test, p_test,
-                                                  t_span_test, method='SV')
-    x_coord_test = x_coord_test.detach().cpu()
-    t_span_test = t_span_test.detach().cpu()
-    q_traj = q_traj.detach().cpu()
-    p_traj = p_traj.detach().cpu()
-    H_traj = H_traj.detach().cpu()
+    if not plot_wHmodel:
+        # set up time integrator that uses our separable HNN
+        time_integrator_sv = TimeIntegrator(separable).to(device)
+        # calculate trajectory
+        q_traj, p_traj, H_traj = time_integrator_sv.integrate(x_coord_test, q_test, p_test,
+                                                      t_span_test, method='SV')
+        x_coord_test = x_coord_test.detach().cpu()
+        t_span_test = t_span_test.detach().cpu()
+        q_traj = q_traj.detach().cpu()
+        p_traj = p_traj.detach().cpu()
+        H_traj = H_traj.detach().cpu()
+
+    else:
+        # set up time integrator that uses our separable HNN for the Hamiltonian conservation NN
+        time_integrator_sv = TimeIntegrator(separable_model.de_function.funcH).to(device)
+        # calculate trajectory
+        q_traj, p_traj, H_traj = time_integrator_sv.integrate(x_coord_test, q_test, p_test,
+                                                              t_span_test, method='SV')
+        x_coord_test = x_coord_test.detach().cpu()
+        t_span_test = t_span_test.detach().cpu()
+        q_traj = q_traj.detach().cpu()
+        p_traj = p_traj.detach().cpu()
+        H_traj = H_traj.detach().cpu()
 
     fig, (ax, ax2, ax3) = plt.subplots(3, 1, gridspec_kw={'height_ratios': [1, 1, 2]}, figsize=(5, 8))
 
