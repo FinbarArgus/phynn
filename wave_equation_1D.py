@@ -24,13 +24,6 @@ class LoopingPillowWriter(PillowWriter):
             self._outfile, save_all=True, append_images=self._frames[1:],
             duration=int(1000 / self.fps), loop=0)
 
-#class Looper(training_loop.TrainerTrainLoopMixin):
-#    def __init__(self):
-#        super(Looper).__init__()
-#
-#    def run_training_batch(self, batch, batch_idx):
-#        print('hi')
-
 
 class Learner(pl.LightningModule):
     def __init__(self, model: nn.Module, train_wHmodel=True, num_boundary=1,
@@ -45,6 +38,8 @@ class Learner(pl.LightningModule):
         self.save_path = save_path
         self.epoch_save = epoch_save
         self.dt=dt
+        self.weight_bias_loss = 0
+        self.second_opt = None
 
     def forward(self, x):
         return self.model.de_function(0, x)
@@ -66,6 +61,31 @@ class Learner(pl.LightningModule):
     def add_gaussian_noise(input, mean, stddev):
         noise = input.data.new(input.size()).normal_(mean, stddev)
         return input + noise
+
+    def calculate_weight_loss(self):
+        """
+        :return: returns a list of lists of related params from all tasks specific networks
+        """
+        weight_bias_loss = 0.
+        for param, paramH in zip(self.model.de_function.func.parameters(),
+                                 self.model.de_function.funcH.parameters()):
+            weight_bias_loss += ((paramH - param)**2).sum()
+
+        return weight_bias_loss
+
+    def on_batch_end(self):
+        """Here we calculate the L2 difference between weights and biases of the
+        two networks. Then update them accordingly.
+        This is soft parameter sharing
+        """
+        self.weight_bias_loss = self.calculate_weight_loss()
+
+        # backward prop to get gradients on weights for the parameter sharing
+        self.weight_bias_loss.backward(retain_graph=True)
+        # step the weights forward according to the gradients from the above back prop
+        self.second_opt.step()
+        self.second_opt.zero_grad()
+
 
     def training_step(self, batch, batch_idx):
         batch_size = len(batch[0])
@@ -100,8 +120,8 @@ class Learner(pl.LightningModule):
 
         loss_main = self.loss(y_hat, y, batch_size)
         # add the spatial gradients to the loss function to make them smooth
-        loss_grads = 0
-        loss_H_const = 0
+        loss_grads = torch.tensor(0.).to(x)
+        loss_H_const = torch.tensor(0.).to(x)
 
         if train_wgradApprox:
             grad_scale = 0.005/batch_size
@@ -125,8 +145,9 @@ class Learner(pl.LightningModule):
         if self.train_wHmodel:
             # Calculate y_hat = (q_dot_hat, p_dot_hat) from the gradient of the HNN
             # _, _, H_old = self.model.de_function(0, x, q, p, H_cons_net=True)
-            H_train_scale = 0.03/(self.dt*batch_size)
+            H_train_scale = 0.1/(self.dt*batch_size) #was 0.03
             time_integrator = TimeIntegrator(self.model.de_function.funcH).to(device)
+            # TODO should i include noise here?
             q_new, p_new, H_old = time_integrator.sv_step(x, q, p, self.dt)
             H_new = self.model.de_function.funcH.H(torch.cat([x, q_new, p_new], dim=1))
 
@@ -134,7 +155,8 @@ class Learner(pl.LightningModule):
 
         loss = loss_main + loss_grads + loss_H_const
         logs = {'train_loss': loss, 'loss_main': loss_main,
-                'loss_grads': loss_grads, 'loss_H':loss_H_const}
+                'loss_grads': loss_grads, 'loss_H':loss_H_const,
+                'loss_weights': self.weight_bias_loss}
 
         #if epoch is a multiple of specified number then save the model
         if self.current_epoch != 0 and self.current_epoch%self.epoch_save == 0 and batch_idx == 0:
@@ -150,6 +172,7 @@ class Learner(pl.LightningModule):
         return {'loss': loss, 'log': logs}
 
     def configure_optimizers(self):
+        self.second_opt = torch.optim.SGD(self.model.parameters(), lr = 0.01)
         return torch.optim.Adam(self.model.parameters(), lr=0.0007, weight_decay=0.01)
 
     @staticmethod
@@ -200,6 +223,7 @@ def separable_hnn(num_points, train_wHmodel=True, input_h_s=None, input_model=No
                             save_path=save_path, epoch_save=epoch_save, dt=dt)
         logger = TensorBoardLogger('separable_logs')
         trainer_sep = pl.Trainer(min_epochs=2001, max_epochs=2001, logger=logger, gpus=1)
+        # step the weights forward according to the gradients from the above back prop
         trainer_sep.fit(learn_sep)
 
     return h_s, model
@@ -268,8 +292,8 @@ if __name__ == '__main__':
     t_span_test = torch.linspace(0, 1.0, 200).to(device)
 
     # bool to determine if model is loaded
-    load_model = True
-    do_train = False
+    load_model = False
+    do_train = True
 
     # whether we want to train with a second Hamiltonian model
     train_wHmodel = True
@@ -328,7 +352,7 @@ if __name__ == '__main__':
     # time_integrator_euler = TimeIntegrator(hamiltonian).to(device)
     # calculate trajectory with an euler step
     # traj_HNN_Euler = time_integrator_euler.integrate(X_test, t_span_test, method='Euler').detach().cpu()
-    plot_wHmodel = True
+    plot_wHmodel = False
 
     if not plot_wHmodel:
         # set up time integrator that uses our separable HNN
