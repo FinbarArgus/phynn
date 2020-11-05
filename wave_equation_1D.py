@@ -31,7 +31,7 @@ class Learner(pl.LightningModule):
         super().__init__()
         self.model = model
         self.c = 0
-        self.eps = 1e-9
+        self.eps = 1e-6
         self.train_wHmodel= train_wHmodel
         self.num_boundary = num_boundary
         self.clockTime = time.process_time()
@@ -93,9 +93,13 @@ class Learner(pl.LightningModule):
         # Note: training with gradients slows down training to a crawl
         train_wgradApprox = False
         train_wH = False
+        train_wH_exact = True
 
         if train_wH and self.train_wHmodel:
             print('cant have train_wH and train_wHmodel set to True, quitting')
+            quit()
+        if train_wH and train_wH_exact:
+            print('cant have train_wH and train_wH_exact set to True, quitting')
             quit()
 
         # get input data and add noise
@@ -104,6 +108,8 @@ class Learner(pl.LightningModule):
         p = self.add_gaussian_noise(batch[2], 0.0, 0.05)
         dq_dx = self.add_gaussian_noise(batch[3], 0.0, 0.05)
         dp_dx =  self.add_gaussian_noise(batch[4], 0.0, 0.05)
+        if batch_size > 4:
+            H_exact =  self.add_gaussian_noise(batch[5], 0.0, 0.05)
 
 
         # Calculate y_hat = (q_dot_hat, p_dot_hat) from the gradient of the HNN
@@ -122,6 +128,7 @@ class Learner(pl.LightningModule):
         # add the spatial gradients to the loss function to make them smooth
         loss_grads = torch.tensor(0.).to(x)
         loss_H_const = torch.tensor(0.).to(x)
+        # loss_nonZero_H = torch.tensor(0.).to(x)
 
         if train_wgradApprox:
             grad_scale = 0.005/batch_size
@@ -143,20 +150,26 @@ class Learner(pl.LightningModule):
             loss_H_const += H_train_scale*abs(H_new - H_old).sum()
 
         if self.train_wHmodel:
-            # Calculate y_hat = (q_dot_hat, p_dot_hat) from the gradient of the HNN
-            # _, _, H_old = self.model.de_function(0, x, q, p, H_cons_net=True)
-            H_train_scale = 0.1/(self.dt*batch_size) #was 0.03
+            H_train_scale = 0.1/self.dt
             time_integrator = TimeIntegrator(self.model.de_function.funcH).to(device)
             # TODO should i include noise here?
             q_new, p_new, H_old = time_integrator.sv_step(x, q, p, self.dt)
             H_new = self.model.de_function.funcH.H(torch.cat([x, q_new, p_new], dim=1))
 
-            loss_H_const += H_train_scale*abs(H_new - H_old).sum()
+            loss_H_const += H_train_scale*abs(H_new[:, 0] - H_exact).mean()
+            if train_wH_exact:
+                H_train_scale2 = 100
+                loss_H_const += H_train_scale2 * abs(H_exact - H_old[:, 0]).mean()
+        elif train_wH_exact:
+            H_train_scale2 = 100
+            H_old = self.model.de_function.funcH.H(torch.cat([x, q, p], dim=1))
+            loss_H_const += H_train_scale2*abs(H_exact - H_old[:,0]).mean()
 
-        loss = loss_main + loss_grads + loss_H_const
+
+        loss = loss_main + loss_grads + loss_H_const # + loss_nonZero_H
         logs = {'train_loss': loss, 'loss_main': loss_main,
                 'loss_grads': loss_grads, 'loss_H':loss_H_const,
-                'loss_weights': self.weight_bias_loss}
+                'loss_weights': self.weight_bias_loss} # , 'loss_nonZero_H': loss_nonZero_H}
 
         #if epoch is a multiple of specified number then save the model
         if self.current_epoch != 0 and self.current_epoch%self.epoch_save == 0 and batch_idx == 0:
@@ -172,8 +185,8 @@ class Learner(pl.LightningModule):
         return {'loss': loss, 'log': logs}
 
     def configure_optimizers(self):
-        self.second_opt = torch.optim.SGD(self.model.parameters(), lr = 0.01)
-        return torch.optim.Adam(self.model.parameters(), lr=0.0007, weight_decay=0.01)
+        self.second_opt = torch.optim.SGD(self.model.parameters(), lr=0.03)
+        return torch.optim.Adam(self.model.parameters(), lr=0.0007, weight_decay=0.01) # lr=0.0007
 
     @staticmethod
     def train_dataloader():
@@ -192,16 +205,16 @@ def separable_hnn(num_points, train_wHmodel=True, input_h_s=None, input_model=No
         model = input_model
     else:
         h_s = HNN1DWaveSeparable(nn.Sequential(
-            nn.Linear(3*num_points, 40),
+            nn.Linear(3*num_points, 60),
             nn.Dropout(0.2),
             nn.Tanh(),
-            nn.Linear(40, 40),
+            nn.Linear(60, 60),
             nn.Dropout(0.2),
             nn.Tanh(),
-            nn.Linear(40, 30),
+            nn.Linear(60, 40),
             nn.Dropout(0.2),
             nn.Tanh(),
-            nn.Linear(30, 20),
+            nn.Linear(40, 20),
             nn.Dropout(0.2),
             nn.Tanh(),
             nn.Linear(20, 10),
@@ -248,7 +261,7 @@ if __name__ == '__main__':
     num_tSteps_training = 1
     num_boundary = 2
     num_datasets = 65536
-    batch_size = 8192
+    batch_size = 4096
     # Training initial conditions [q, p, dq/dx, dp/dx, x]
     x_coord = torch.zeros(num_datasets, num_train_xCoords).to(device)
     x_coord[:, num_boundary:-1*num_boundary] = torch.rand(num_datasets, num_train_xCoords-num_boundary*2).sort()[0]
@@ -257,6 +270,7 @@ if __name__ == '__main__':
     p = torch.zeros(num_datasets, num_train_xCoords).to(device)
     dq_dx = torch.zeros(num_datasets, num_train_xCoords).to(device)
     dp_dx = torch.zeros(num_datasets, num_train_xCoords).to(device)
+    H_exact = torch.zeros(num_datasets).to(device)
     for batch_idx in range(num_datasets):
         amplitude_q = 2*np.random.rand(1)[0]-1
         amplitude_p = 2*np.random.rand(1)[0]-1
@@ -264,6 +278,10 @@ if __name__ == '__main__':
         p[batch_idx, :] = amplitude_p*np.pi * torch.sin(np.pi * x_coord[batch_idx, :]).to(device)
         dq_dx[batch_idx, :] = -amplitude_q*np.pi ** 2 * torch.sin(np.pi * x_coord[batch_idx, :]).to(device)
         dp_dx[batch_idx, :] = amplitude_p*np.pi ** 2 * torch.cos(np.pi * x_coord[batch_idx, :]).to(device)
+        # This is the exact hamiltonian calculated by hand
+        # In future will have to calculate a general hamiltonian for different frequencies
+        H_exact[batch_idx] = 0.5*(amplitude_q**2*np.pi**2 + amplitude_p**2*np.pi**2)
+
 
     # X_sv = torch.cat([
     #     x_coord,
@@ -274,7 +292,7 @@ if __name__ == '__main__':
     # ]).to(device)
     # X_euler = X_sv
     # Training time step
-    dt_train = 0.001
+    dt_train = 0.01
 
     # Testing conditions
     # temporarily test with the same as one of the training init conditions
@@ -288,11 +306,12 @@ if __name__ == '__main__':
     p_test = torch.zeros(1, num_train_xCoords).to(device)
     dq_dx_test = -amplitude_q_test*np.pi ** 2 * torch.sin(np.pi * x_coord_test).to(device)
     dp_dx_test = torch.zeros(1, num_train_xCoords).to(device)
+    H_exact_test = 0.5 * (amplitude_q_test ** 2 * np.pi ** 2)
     # Testing time span
-    t_span_test = torch.linspace(0, 1.0, 200).to(device)
+    t_span_test = torch.linspace(0, 2.0, 400).to(device)
 
     # bool to determine if model is loaded
-    load_model = False
+    load_model = True
     do_train = True
 
     # whether we want to train with a second Hamiltonian model
@@ -301,7 +320,7 @@ if __name__ == '__main__':
     # Wrap in for loop and change inputs to the stepped forward p's and q's
     for tStep in range(num_tSteps_training):
 
-        train = data.TensorDataset(x_coord, q, p, dq_dx, dp_dx)
+        train = data.TensorDataset(x_coord, q, p, dq_dx, dp_dx, H_exact)
         trainloader = data.DataLoader(train, batch_size=batch_size, shuffle=True)
 
         # hamiltonian, basic_model = basic_hnn()
@@ -383,7 +402,7 @@ if __name__ == '__main__':
     ax.set_xlim(0, 1)
     ax.set_ylim(-2, 2)
     ax2.set_xlim(0, t_span_test[-1])
-    ax2.set_ylim(-10, 10)
+    ax2.set_ylim(-1, 10)
     ax3.set_xlim(-2, 2)
     ax3.set_ylim(-2, 2)
     ax.set_xlabel('x [m]')
@@ -393,9 +412,11 @@ if __name__ == '__main__':
     ax3.set_ylabel('p [m/s]')
     line, = ax.plot([], [], label='q', lw=3)
     line2, = ax.plot([], [], label='p', lw=3, color='r')
-    line3, = ax2.plot([], [], lw=3, color='k')
-    line4, = ax3.plot([], [], lw=1, color='g')
+    line3, = ax2.plot([], [], lw=1, color='g', label='Test')
+    line4, = ax2.plot([], [], lw=1, color='k', label='Exact')
+    line5, = ax3.plot([], [], lw=1, color='g')
     ax.legend()
+    ax2.legend()
     fig.tight_layout(pad=1.0)
 
     def init():
@@ -403,15 +424,17 @@ if __name__ == '__main__':
         line2.set_data([], [])
         line3.set_data([], [])
         line4.set_data([], [])
-        return line,
+        line5.set_data([], [])
+        return line, line2, line3, line4, line5
 
 
     def animate(i):
         line.set_data(x_coord_test[0], q_traj[0, :, i])
         line2.set_data(x_coord_test[0], p_traj[0, :, i])
         line3.set_data(t_span_test[0:i], H_traj[0:i])
-        line4.set_data(q_traj[0, 5, 0:i], p_traj[0, 5, 0:i])
-        return line, line2, line3
+        line4.set_data(t_span_test, H_exact_test*np.ones(len(t_span_test)))
+        line5.set_data(q_traj[0, 5, 0:i], p_traj[0, 5, 0:i])
+        return line, line2, line3, line4, line5
 
 
     anim = FuncAnimation(fig, animate, frames=len(t_span_test), init_func=init, blit=True)
