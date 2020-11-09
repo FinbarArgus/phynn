@@ -40,6 +40,7 @@ class Learner(pl.LightningModule):
         self.dt=dt
         self.weight_bias_loss = 0
         self.second_opt = None
+        self.scheduler = None
 
     def forward(self, x):
         return self.model.de_function(0, x)
@@ -91,7 +92,7 @@ class Learner(pl.LightningModule):
         batch_size = len(batch[0])
 
         # Note: training with gradients slows down training to a crawl
-        train_wgradApprox = False
+        train_wgradApprox = True
         train_wH = False
         train_wH_exact = True
 
@@ -131,7 +132,7 @@ class Learner(pl.LightningModule):
         # loss_nonZero_H = torch.tensor(0.).to(x)
 
         if train_wgradApprox:
-            grad_scale = 0.005/batch_size
+            grad_scale = 0.2
             q_dot_diff_approx = torch.abs((q_dot_hat[:, self.num_boundary + 1:-self.num_boundary] -
                                  q_dot_hat[:, self.num_boundary:-self.num_boundary-1]) / \
                                 (x[:, self.num_boundary + 1:-self.num_boundary] -
@@ -140,7 +141,7 @@ class Learner(pl.LightningModule):
                                            p_dot_hat[:, self.num_boundary:-self.num_boundary-1]) / \
                                           (x[:, self.num_boundary + 1:-self.num_boundary] -
                                            x[:, self.num_boundary:-self.num_boundary-1] + self.eps))
-            loss_grads += grad_scale*(q_dot_diff_approx.sum() + p_dot_diff_approx.sum())
+            loss_grads += grad_scale*(q_dot_diff_approx.mean() + p_dot_diff_approx.mean())
         if train_wH:
             H_train_scale = 0.03/(self.dt*batch_size)
             time_integrator = TimeIntegrator(self.model.de_function.func).to(device)
@@ -150,7 +151,7 @@ class Learner(pl.LightningModule):
             loss_H_const += H_train_scale*abs(H_new - H_old).sum()
 
         if self.train_wHmodel:
-            H_train_scale = 0.1/self.dt
+            H_train_scale = 100 # 0.1/self.dt
             time_integrator = TimeIntegrator(self.model.de_function.funcH).to(device)
             # TODO should i include noise here?
             q_new, p_new, H_old = time_integrator.sv_step(x, q, p, self.dt)
@@ -169,7 +170,7 @@ class Learner(pl.LightningModule):
         loss = loss_main + loss_grads + loss_H_const # + loss_nonZero_H
         logs = {'train_loss': loss, 'loss_main': loss_main,
                 'loss_grads': loss_grads, 'loss_H':loss_H_const,
-                'loss_weights': self.weight_bias_loss} # , 'loss_nonZero_H': loss_nonZero_H}
+                'loss_weights': self.weight_bias_loss, 'H learning rate': self.second_opt.param_groups[0]['lr']}
 
         #if epoch is a multiple of specified number then save the model
         if self.current_epoch != 0 and self.current_epoch%self.epoch_save == 0 and batch_idx == 0:
@@ -181,12 +182,21 @@ class Learner(pl.LightningModule):
                 'loss': loss,
                 }, self.save_path)
             # 'optimizer_state_dict': optimizer.state_dict(),
+        adaptive_lr = True
+        # set up lr scheduler on first epoch
+        if self.current_epoch == 0 and batch_idx == 0:
+            lmda_lr = lambda epoch: 2.0
+            self.scheduler = torch.optim.lr_scheduler.MultiplicativeLR(self.second_opt, lr_lambda=lmda_lr)
+        # If epoch is a multiple of 300, increase the learning rate for H conservation
+        if adaptive_lr and self.current_epoch != 0 and \
+                self.current_epoch % 100 == 0 and batch_idx == 0 and self.second_opt.param_groups[0]['lr'] < 0.04:
+            self.scheduler.step()
 
         return {'loss': loss, 'log': logs}
 
     def configure_optimizers(self):
-        self.second_opt = torch.optim.SGD(self.model.parameters(), lr=0.03)
-        return torch.optim.Adam(self.model.parameters(), lr=0.0007, weight_decay=0.01) # lr=0.0007
+        self.second_opt = torch.optim.SGD(self.model.parameters(), lr=0.005)
+        return torch.optim.Adam(self.model.parameters(), lr=0.0007, weight_decay=0.01)
 
     @staticmethod
     def train_dataloader():
@@ -206,6 +216,9 @@ def separable_hnn(num_points, train_wHmodel=True, input_h_s=None, input_model=No
     else:
         h_s = HNN1DWaveSeparable(nn.Sequential(
             nn.Linear(3*num_points, 60),
+            nn.Dropout(0.2),
+            nn.Tanh(),
+            nn.Linear(60, 60),
             nn.Dropout(0.2),
             nn.Tanh(),
             nn.Linear(60, 60),
@@ -300,18 +313,19 @@ if __name__ == '__main__':
     x_coord_test = torch.zeros(1, num_train_xCoords).to(device)
     x_coord_test[:1, num_boundary-1:-num_boundary+1] = torch.linspace(0, 1.0, num_train_xCoords-num_boundary)
     x_coord_test[:1, -num_boundary:] = 1.0
-    amplitude_q_test = 0.5
+    amplitude_q_test = 0.3
+    amplitude_p_test = 0.3
     #x_coord_test = torch.rand(num_train_xCoords).to(device)
     q_test = amplitude_q_test * np.pi * torch.cos(np.pi * x_coord_test).to(device)
-    p_test = torch.zeros(1, num_train_xCoords).to(device)
+    p_test = amplitude_p_test * np.pi * torch.sin(np.pi * x_coord_test).to(device)
     dq_dx_test = -amplitude_q_test*np.pi ** 2 * torch.sin(np.pi * x_coord_test).to(device)
-    dp_dx_test = torch.zeros(1, num_train_xCoords).to(device)
-    H_exact_test = 0.5 * (amplitude_q_test ** 2 * np.pi ** 2)
+    dp_dx_test = amplitude_p_test*np.pi ** 2 * torch.cos(np.pi * x_coord_test).to(device)
+    H_exact_test = 0.5 * (amplitude_q_test ** 2 * np.pi ** 2 + amplitude_p_test ** 2 * np.pi ** 2)
     # Testing time span
-    t_span_test = torch.linspace(0, 2.0, 400).to(device)
+    t_span_test = torch.linspace(0, 3.0, 600).to(device)
 
     # bool to determine if model is loaded
-    load_model = True
+    load_model = False
     do_train = True
 
     # whether we want to train with a second Hamiltonian model

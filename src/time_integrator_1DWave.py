@@ -35,14 +35,23 @@ class TimeIntegrator(nn.Module):
         """
         q_dot_0, p_dot_0, H_0 = self.model.forward(x, q_0, p_0, detach=True)
         # TODO do i need to detach inputs including x here?
+        x = x.detach()
+        q_0 = q_0.detach()
+        p_0 = p_0.detach()
 
         p_temp = p_0 + dt / 2 * p_dot_0
 
         q_dot_temp, p_dot_temp, _ = self.model.forward(x, q_0, p_temp, detach=True)
+        x = x.detach()
+        q_0 = q_0.detach()
+        p_temp = p_temp.detach()
 
         q_1 = q_0 + dt * q_dot_temp
 
         q_dot_temp2, p_dot_temp2, _ = self.model.forward(x, q_1, p_temp, detach=True)
+        # x = x.detach()
+        q_1 = q_1.detach()
+        p_temp = p_temp.detach()
 
         p_1 = p_temp + dt / 2 * p_dot_temp2
 
