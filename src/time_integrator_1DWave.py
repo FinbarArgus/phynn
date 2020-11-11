@@ -105,7 +105,7 @@ class TimeIntegrator(nn.Module):
         H_path = torch.zeros([t_span.shape[0]]).to(x_0)
         q_path[:, :, 0] = q_0
         p_path[:, :, 0] = p_0
-        H_path[0] = self.model.H(torch.cat([x_0[0, :], q_0[0, :], p_0[0, :]]))
+        H_path[0] = self.model.H(torch.cat([x_0[:1, :], q_0[:1, :], p_0[:1, :]], dim=1))
         print('integrating for trajectory')
         for count, t in enumerate(t_span):
             print(count)

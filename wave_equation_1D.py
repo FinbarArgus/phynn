@@ -14,6 +14,8 @@ import os
 from src.maths.dennet import DENNet
 from src.mechanics.hamiltonian import HNN1DWaveSeparable
 from src.time_integrator_1DWave import TimeIntegrator
+from src.dense_net import SimpleEncoder
+from src.dense_net import DenseNet
 
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
@@ -50,8 +52,8 @@ class Learner(pl.LightningModule):
         return
 
     @staticmethod
-    def loss(y, y_hat, batch_size):
-        return ((y - y_hat) ** 2).sum()/batch_size
+    def loss(y, y_hat):
+        return ((y - y_hat) ** 2).mean()
 
     @staticmethod
     def calculate_f(x, dq_dx, dp_dx):
@@ -79,20 +81,22 @@ class Learner(pl.LightningModule):
         two networks. Then update them accordingly.
         This is soft parameter sharing
         """
-        self.weight_bias_loss = self.calculate_weight_loss()
+        # TODO temporarily don't do this
+        return
+#        self.weight_bias_loss = self.calculate_weight_loss()
 
         # backward prop to get gradients on weights for the parameter sharing
-        self.weight_bias_loss.backward(retain_graph=True)
+#        self.weight_bias_loss.backward(retain_graph=True)
         # step the weights forward according to the gradients from the above back prop
-        self.second_opt.step()
-        self.second_opt.zero_grad()
+#        self.second_opt.step()
+#        self.second_opt.zero_grad()
 
 
     def training_step(self, batch, batch_idx):
         batch_size = len(batch[0])
 
         # Note: training with gradients slows down training to a crawl
-        train_wgradApprox = True
+        train_wgradApprox = False
         train_wH = False
         train_wH_exact = True
 
@@ -105,12 +109,12 @@ class Learner(pl.LightningModule):
 
         # get input data and add noise
         x = batch[0]
-        q = self.add_gaussian_noise(batch[1], 0.0, 0.05)
-        p = self.add_gaussian_noise(batch[2], 0.0, 0.05)
-        dq_dx = self.add_gaussian_noise(batch[3], 0.0, 0.05)
-        dp_dx =  self.add_gaussian_noise(batch[4], 0.0, 0.05)
+        q = self.add_gaussian_noise(batch[1], 0.0, 0.01)
+        p = self.add_gaussian_noise(batch[2], 0.0, 0.01)
+        dq_dx = self.add_gaussian_noise(batch[3], 0.0, 0.01)
+        dp_dx =  self.add_gaussian_noise(batch[4], 0.0, 0.01)
         if batch_size > 4:
-            H_exact =  self.add_gaussian_noise(batch[5], 0.0, 0.05)
+            H_exact = self.add_gaussian_noise(batch[5], 0.0, 0.01)
 
 
         # Calculate y_hat = (q_dot_hat, p_dot_hat) from the gradient of the HNN
@@ -125,49 +129,47 @@ class Learner(pl.LightningModule):
         p_dot[:, -1*self.num_boundary:] = 0
         y = torch.cat([q_dot, p_dot], dim=1)
 
-        loss_main = self.loss(y_hat, y, batch_size)
+        loss_main = self.loss(y_hat, y)
         # add the spatial gradients to the loss function to make them smooth
         loss_grads = torch.tensor(0.).to(x)
         loss_H_const = torch.tensor(0.).to(x)
         # loss_nonZero_H = torch.tensor(0.).to(x)
+        grad_scale = 0.000005
+        H_train_scale = 1.0  # 0.1/self.dt
+        H_train_scale2 = 1.0
 
         if train_wgradApprox:
-            grad_scale = 0.2
-            q_dot_diff_approx = torch.abs((q_dot_hat[:, self.num_boundary + 1:-self.num_boundary] -
+            q_dot_diff_approx = ((q_dot_hat[:, self.num_boundary + 1:-self.num_boundary] -
                                  q_dot_hat[:, self.num_boundary:-self.num_boundary-1]) / \
                                 (x[:, self.num_boundary + 1:-self.num_boundary] -
-                                 x[:, self.num_boundary:-self.num_boundary-1] + self.eps))
-            p_dot_diff_approx = torch.abs((p_dot_hat[:, self.num_boundary + 1:-self.num_boundary] -
+                                 x[:, self.num_boundary:-self.num_boundary-1] + self.eps))**2
+            p_dot_diff_approx = ((p_dot_hat[:, self.num_boundary + 1:-self.num_boundary] -
                                            p_dot_hat[:, self.num_boundary:-self.num_boundary-1]) / \
                                           (x[:, self.num_boundary + 1:-self.num_boundary] -
-                                           x[:, self.num_boundary:-self.num_boundary-1] + self.eps))
+                                           x[:, self.num_boundary:-self.num_boundary-1] + self.eps))**2
             loss_grads += grad_scale*(q_dot_diff_approx.mean() + p_dot_diff_approx.mean())
         if train_wH:
-            H_train_scale = 0.03/(self.dt*batch_size)
             time_integrator = TimeIntegrator(self.model.de_function.func).to(device)
             # TODO should i include noise here?
             q_new, p_new, H_old = time_integrator.sv_step(x, q, p, self.dt)
             H_new = self.model.de_function.func.H(torch.cat([x, q_new, p_new], dim=1))
-            loss_H_const += H_train_scale*abs(H_new - H_old).sum()
+            loss_H_const += H_train_scale*((H_new - H_old)**2).mean()
 
         if self.train_wHmodel:
-            H_train_scale = 100 # 0.1/self.dt
             time_integrator = TimeIntegrator(self.model.de_function.funcH).to(device)
             # TODO should i include noise here?
             q_new, p_new, H_old = time_integrator.sv_step(x, q, p, self.dt)
             H_new = self.model.de_function.funcH.H(torch.cat([x, q_new, p_new], dim=1))
 
-            loss_H_const += H_train_scale*abs(H_new[:, 0] - H_exact).mean()
+            loss_H_const += H_train_scale*((H_new[:, 0] - H_exact)**2).mean()
             if train_wH_exact:
-                H_train_scale2 = 100
-                loss_H_const += H_train_scale2 * abs(H_exact - H_old[:, 0]).mean()
+                loss_H_const += H_train_scale2 * ((H_exact - H_old[:, 0])**2).mean()
         elif train_wH_exact:
-            H_train_scale2 = 100
             H_old = self.model.de_function.funcH.H(torch.cat([x, q, p], dim=1))
-            loss_H_const += H_train_scale2*abs(H_exact - H_old[:,0]).mean()
+            loss_H_const += H_train_scale2*((H_exact - H_old[:, 0])**2).mean()
 
 
-        loss = loss_main + loss_grads + loss_H_const # + loss_nonZero_H
+        loss = loss_H_const # loss_main + loss_grads + loss_H_const # + loss_nonZero_H
         logs = {'train_loss': loss, 'loss_main': loss_main,
                 'loss_grads': loss_grads, 'loss_H':loss_H_const,
                 'loss_weights': self.weight_bias_loss, 'H learning rate': self.second_opt.param_groups[0]['lr']}
@@ -182,21 +184,21 @@ class Learner(pl.LightningModule):
                 'loss': loss,
                 }, self.save_path)
             # 'optimizer_state_dict': optimizer.state_dict(),
-        adaptive_lr = True
+        adaptive_lr = False
         # set up lr scheduler on first epoch
         if self.current_epoch == 0 and batch_idx == 0:
             lmda_lr = lambda epoch: 2.0
             self.scheduler = torch.optim.lr_scheduler.MultiplicativeLR(self.second_opt, lr_lambda=lmda_lr)
         # If epoch is a multiple of 300, increase the learning rate for H conservation
         if adaptive_lr and self.current_epoch != 0 and \
-                self.current_epoch % 100 == 0 and batch_idx == 0 and self.second_opt.param_groups[0]['lr'] < 0.04:
+                self.current_epoch % 100 == 0 and batch_idx == 0 and self.second_opt.param_groups[0]['lr'] < 0.1:
             self.scheduler.step()
 
         return {'loss': loss, 'log': logs}
 
     def configure_optimizers(self):
-        self.second_opt = torch.optim.SGD(self.model.parameters(), lr=0.005)
-        return torch.optim.Adam(self.model.parameters(), lr=0.0007, weight_decay=0.01)
+        self.second_opt = torch.optim.SGD(self.model.parameters(), lr=0.00001) #lr=0.005)
+        return torch.optim.Adam(self.model.parameters(), lr=0.0005, weight_decay=0.01)
 
     @staticmethod
     def train_dataloader():
@@ -214,32 +216,20 @@ def separable_hnn(num_points, train_wHmodel=True, input_h_s=None, input_model=No
         h_s = input_h_s
         model = input_model
     else:
-        h_s = HNN1DWaveSeparable(nn.Sequential(
-            nn.Linear(3*num_points, 60),
-            nn.Dropout(0.2),
-            nn.Tanh(),
-            nn.Linear(60, 60),
-            nn.Dropout(0.2),
-            nn.Tanh(),
-            nn.Linear(60, 60),
-            nn.Dropout(0.2),
-            nn.Tanh(),
-            nn.Linear(60, 40),
-            nn.Dropout(0.2),
-            nn.Tanh(),
-            nn.Linear(40, 20),
-            nn.Dropout(0.2),
-            nn.Tanh(),
-            nn.Linear(20, 10),
-            nn.Dropout(0.2),
-            nn.Tanh(),
-            nn.Linear(10, 1),
-            nn.Dropout(0.2),
-            nn.Softplus())).to(device)
+        # architecture = SimpleEncoder([3*num_points, 60, 60, 40, 20, 10, 1],
+        #                              drop_rate=0.2, batch_norm=False).to(device)
+        architecture = DenseNet(3*num_points, 1, [8], [40], drop_rate=0.0, batch_norm=True).to(device)
+        h_s = HNN1DWaveSeparable(architecture)
+
+        # initialise weights
+        # if train:
         for m in h_s.modules():
             if isinstance(m, nn.Linear):
                 nn.init.xavier_normal_(m.weight, gain=nn.init.calculate_gain('tanh'))
                 nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.BatchNorm1d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
 
         model = DENNet(h_s, case='1DWave').to(device)
 
@@ -248,7 +238,7 @@ def separable_hnn(num_points, train_wHmodel=True, input_h_s=None, input_model=No
         learn_sep = Learner(model, train_wHmodel=train_wHmodel, num_boundary=num_boundary,
                             save_path=save_path, epoch_save=epoch_save, dt=dt)
         logger = TensorBoardLogger('separable_logs')
-        trainer_sep = pl.Trainer(min_epochs=2001, max_epochs=2001, logger=logger, gpus=1)
+        trainer_sep = pl.Trainer(min_epochs=5, max_epochs=5, logger=logger, gpus=1)
         # step the weights forward according to the gradients from the above back prop
         trainer_sep.fit(learn_sep)
 
@@ -259,11 +249,17 @@ if __name__ == '__main__':
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print('using cuda device: {}'.format(torch.cuda.get_device_name(torch.cuda.current_device())))
 
+    # bool to determine if model is loaded
+    load_model = True
+    do_train = False
+    # whether we want to train with a second Hamiltonian model
+    train_wHmodel = False
+
     #save path
     save_dir = 'saved_models'
     if not os.path.exists(save_dir):
         os.mkdir(save_dir)
-    model_name = 'model_encoder_soft_share.pt'
+    model_name = 'model_denseNet.pt'
     save_path = os.path.join(save_dir, model_name)
     # save every epoch_save epochs
     epoch_save = 50
@@ -273,27 +269,31 @@ if __name__ == '__main__':
     num_train_xCoords = 20
     num_tSteps_training = 1
     num_boundary = 2
-    num_datasets = 65536
-    batch_size = 4096
+    num_datasets = 2**17
+    batch_size = 2048
     # Training initial conditions [q, p, dq/dx, dp/dx, x]
     x_coord = torch.zeros(num_datasets, num_train_xCoords).to(device)
-    x_coord[:, num_boundary:-1*num_boundary] = torch.rand(num_datasets, num_train_xCoords-num_boundary*2).sort()[0]
-    x_coord[:, -1*num_boundary:] = 1.0
     q = torch.zeros(num_datasets, num_train_xCoords).to(device)
     p = torch.zeros(num_datasets, num_train_xCoords).to(device)
     dq_dx = torch.zeros(num_datasets, num_train_xCoords).to(device)
     dp_dx = torch.zeros(num_datasets, num_train_xCoords).to(device)
     H_exact = torch.zeros(num_datasets).to(device)
-    for batch_idx in range(num_datasets):
-        amplitude_q = 2*np.random.rand(1)[0]-1
-        amplitude_p = 2*np.random.rand(1)[0]-1
-        q[batch_idx, :] = amplitude_q*np.pi * torch.cos(np.pi * x_coord[batch_idx, :]).to(device)
-        p[batch_idx, :] = amplitude_p*np.pi * torch.sin(np.pi * x_coord[batch_idx, :]).to(device)
-        dq_dx[batch_idx, :] = -amplitude_q*np.pi ** 2 * torch.sin(np.pi * x_coord[batch_idx, :]).to(device)
-        dp_dx[batch_idx, :] = amplitude_p*np.pi ** 2 * torch.cos(np.pi * x_coord[batch_idx, :]).to(device)
-        # This is the exact hamiltonian calculated by hand
-        # In future will have to calculate a general hamiltonian for different frequencies
-        H_exact[batch_idx] = 0.5*(amplitude_q**2*np.pi**2 + amplitude_p**2*np.pi**2)
+    H_normalise = 0.1
+
+    if do_train:
+        x_coord[:, num_boundary:-1 * num_boundary] = \
+            torch.rand(num_datasets, num_train_xCoords - num_boundary * 2).sort()[0]
+        x_coord[:, -1 * num_boundary:] = 1.0
+        for batch_idx in range(num_datasets):
+            amplitude_q = 2*np.random.rand(1)[0]-1
+            amplitude_p = 2*np.random.rand(1)[0]-1
+            q[batch_idx, :] = amplitude_q*np.pi * torch.cos(np.pi * x_coord[batch_idx, :]).to(device)
+            p[batch_idx, :] = amplitude_p*np.pi * torch.sin(np.pi * x_coord[batch_idx, :]).to(device)
+            dq_dx[batch_idx, :] = -amplitude_q*np.pi ** 2 * torch.sin(np.pi * x_coord[batch_idx, :]).to(device)
+            dp_dx[batch_idx, :] = amplitude_p*np.pi ** 2 * torch.cos(np.pi * x_coord[batch_idx, :]).to(device)
+            # This is the exact hamiltonian calculated by hand
+            # In future will have to calculate a general hamiltonian for different frequencies
+            H_exact[batch_idx] = H_normalise*0.5*(amplitude_q**2*np.pi**2 + amplitude_p**2*np.pi**2)
 
 
     # X_sv = torch.cat([
@@ -308,61 +308,83 @@ if __name__ == '__main__':
     dt_train = 0.01
 
     # Testing conditions
+    num_test = 10
     # temporarily test with the same as one of the training init conditions
     # x_coord_test = x_coord[0:1, :]
-    x_coord_test = torch.zeros(1, num_train_xCoords).to(device)
-    x_coord_test[:1, num_boundary-1:-num_boundary+1] = torch.linspace(0, 1.0, num_train_xCoords-num_boundary)
-    x_coord_test[:1, -num_boundary:] = 1.0
-    amplitude_q_test = 0.3
-    amplitude_p_test = 0.3
-    #x_coord_test = torch.rand(num_train_xCoords).to(device)
-    q_test = amplitude_q_test * np.pi * torch.cos(np.pi * x_coord_test).to(device)
-    p_test = amplitude_p_test * np.pi * torch.sin(np.pi * x_coord_test).to(device)
-    dq_dx_test = -amplitude_q_test*np.pi ** 2 * torch.sin(np.pi * x_coord_test).to(device)
-    dp_dx_test = amplitude_p_test*np.pi ** 2 * torch.cos(np.pi * x_coord_test).to(device)
-    H_exact_test = 0.5 * (amplitude_q_test ** 2 * np.pi ** 2 + amplitude_p_test ** 2 * np.pi ** 2)
-    # Testing time span
-    t_span_test = torch.linspace(0, 3.0, 600).to(device)
+    x_coord_test = torch.zeros(num_test, num_train_xCoords).to(device)
+    x_coord_test[:, num_boundary:-1*num_boundary] = torch.rand(num_test, num_train_xCoords - num_boundary*2).sort()[0]
+    # overwrite first entry to be uniform
+    x_coord_test[:1, num_boundary:-1*num_boundary] = torch.linspace(0, 1.0, num_train_xCoords-num_boundary*2)
+    # set right boundary to 1
+    x_coord_test[:, -1*num_boundary:] = 1.0
+    q_test = torch.zeros(num_test, num_train_xCoords).to(device)
+    p_test = torch.zeros(num_test, num_train_xCoords).to(device)
+    H_exact_test = torch.zeros(num_test)
 
-    # bool to determine if model is loaded
-    load_model = False
-    do_train = True
+    # first entry is uniform with 0.5 amplitude
+    amplitude_q_test = 0.5
+    amplitude_p_test = 0.5
+    for test_idx in range(num_test):
+        q_test[test_idx, :] = amplitude_q_test*np.pi * torch.cos(np.pi * x_coord_test[test_idx, :]).to(device)
+        p_test[test_idx, :] = amplitude_p_test*np.pi * torch.sin(np.pi * x_coord_test[test_idx, :]).to(device)
+        # This is the exact hamiltonian calculated by hand
+        # In future will have to calculate a general hamiltonian for different frequencies
+        H_exact_test[test_idx] = H_normalise*0.5*(amplitude_q_test**2*np.pi**2 + amplitude_p_test**2*np.pi**2)
 
-    # whether we want to train with a second Hamiltonian model
-    train_wHmodel = True
+        amplitude_q_test = 2*np.random.rand(1)[0]-1
+        amplitude_p_test = 2*np.random.rand(1)[0]-1
+
+    t_span_test = torch.linspace(0, 0.3, 60).to(device)
+
 
     # Wrap in for loop and change inputs to the stepped forward p's and q's
     for tStep in range(num_tSteps_training):
 
-        train = data.TensorDataset(x_coord, q, p, dq_dx, dp_dx, H_exact)
-        trainloader = data.DataLoader(train, batch_size=batch_size, shuffle=True)
+        if do_train:
+            train = data.TensorDataset(x_coord, q, p, dq_dx, dp_dx, H_exact)
+            trainloader = data.DataLoader(train, batch_size=batch_size, shuffle=True)
 
         # hamiltonian, basic_model = basic_hnn()
         # load model if required
-        if tStep == 0 and load_model:
-            separable, separable_model = separable_hnn(num_train_xCoords, train_wHmodel=train_wHmodel,
-                                                       train=False)
-            # optimizer = TheOptimizerClass(*args, **kwargs)
-
-            checkpoint = torch.load(save_path)
-            separable_model.load_state_dict(checkpoint['model_state_dict'])
-            separable = separable_model.de_function.func
-            # optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            epoch = checkpoint['epoch']
-            loss = checkpoint['loss']
-
-            print('loaded model at epoch {} from {}'.format(epoch, save_path))
-
-        if tStep == 0 and not load_model:
-            if do_train:
+        if tStep == 0:
+            if load_model:
                 separable, separable_model = separable_hnn(num_train_xCoords, train_wHmodel=train_wHmodel,
-                                                           save_path=save_path, epoch_save=epoch_save, dt=dt_train)
+                                                           train=False)
+                # optimizer = TheOptimizerClass(*args, **kwargs)
+
+                checkpoint = torch.load(save_path)
+                separable_model.load_state_dict(checkpoint['model_state_dict'])
+                separable_model.eval()
+                separable = separable_model.de_function.func
+                separable_H = separable_model.de_function.funcH
+                # optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                epoch = checkpoint['epoch']
+                loss = checkpoint['loss']
+
+                print('loaded model at epoch {} from {}'.format(epoch, save_path))
+
+                if do_train:
+                    _, separable_model = separable_hnn(num_train_xCoords, train_wHmodel=train_wHmodel,
+                                                               input_h_s=separable, input_model=separable_model,
+                                                               save_path=save_path, epoch_save=epoch_save, dt=dt_train)
+                    separable_model.eval()
+                    separable = separable_model.de_function.func
+                    separable_H = separable_model.de_function.funcH
+
             else:
-                print('currently not loading a model and not training, WHAT are you doing?')
-        elif do_train:
-            separable, separable_model = separable_hnn(num_train_xCoords, train_wHmodel=train_wHmodel,
-                                                       input_h_s=separable, input_model=separable_model,
-                                                       save_path=save_path, epoch_save=epoch_save, dt=dt_train)
+                if do_train:
+                    _, separable_model = separable_hnn(num_train_xCoords, train_wHmodel=train_wHmodel,
+                                                               save_path=save_path, epoch_save=epoch_save, dt=dt_train)
+                    separable_model.eval()
+                    # TODO do i need to make sure separable is eval()
+                    separable = separable_model.de_function.func
+                    separable_H = separable_model.de_function.funcH
+                else:
+                    print('currently not loading a model and not training, WHAT are you doing?')
+        else:
+            print('currently not working for multiple time steps')
+            exit()
+
 
         # set up time integrator that uses our HNN
         # time_integrator_euler = TimeIntegrator(hamiltonian).to(device)
@@ -381,17 +403,36 @@ if __name__ == '__main__':
     # calculate trajectory with odeint
     # traj = model.trajectory(xInit, s_span).detach().cpu()
 
+    print('Hamiltonian comparison')
+    fig, ax = plt.subplots(1, 1)
+    # ax.set_ylim(0, 5)
+    ax.set_xlabel('test number')
+    ax.set_ylabel('Hamiltonian [J]')
+
+    #H_test = torch.zeros(num_test).to(device)
+    #H_test = separable_model.de_function.func.H(torch.cat([x_coord_test, q_test, p_test], dim=1))
+    #H_test = H_test.detach().cpu()
+    H_test_H = torch.zeros(num_test).to(device)
+    H_test_H = separable_H.H(torch.cat([x_coord_test, q_test, p_test], dim=1))
+    H_test_H = H_test_H.detach().cpu() # / H_normalise
+    # H_exact_test = H_exact_test.detach().cpu() # / H_normalise
+    #plt.plot(H_test, marker='x', linestyle='', color='r', label='H_test_an')
+    plt.plot(H_test_H, marker='x', linestyle='', color='b', label='H_test')
+    plt.plot(H_exact_test, marker='x', linestyle='', color='r', label='H_test_exact')
+    ax.legend()
+    plt.savefig('H_comparison.png')
+
     # set up time integrator that uses our HNN
     # time_integrator_euler = TimeIntegrator(hamiltonian).to(device)
     # calculate trajectory with an euler step
     # traj_HNN_Euler = time_integrator_euler.integrate(X_test, t_span_test, method='Euler').detach().cpu()
-    plot_wHmodel = False
+    plot_wHmodel = True
 
     if not plot_wHmodel:
         # set up time integrator that uses our separable HNN
         time_integrator_sv = TimeIntegrator(separable).to(device)
         # calculate trajectory
-        q_traj, p_traj, H_traj = time_integrator_sv.integrate(x_coord_test, q_test, p_test,
+        q_traj, p_traj, H_traj = time_integrator_sv.integrate(x_coord_test[:1], q_test[:1], p_test[:1],
                                                       t_span_test, method='SV')
         x_coord_test = x_coord_test.detach().cpu()
         t_span_test = t_span_test.detach().cpu()
@@ -401,9 +442,9 @@ if __name__ == '__main__':
 
     else:
         # set up time integrator that uses our separable HNN for the Hamiltonian conservation NN
-        time_integrator_sv = TimeIntegrator(separable_model.de_function.funcH).to(device)
+        time_integrator_sv = TimeIntegrator(separable_H).to(device)
         # calculate trajectory
-        q_traj, p_traj, H_traj = time_integrator_sv.integrate(x_coord_test, q_test, p_test,
+        q_traj, p_traj, H_traj = time_integrator_sv.integrate(x_coord_test[:1], q_test[:1], p_test[:1],
                                                               t_span_test, method='SV')
         x_coord_test = x_coord_test.detach().cpu()
         t_span_test = t_span_test.detach().cpu()
@@ -416,7 +457,7 @@ if __name__ == '__main__':
     ax.set_xlim(0, 1)
     ax.set_ylim(-2, 2)
     ax2.set_xlim(0, t_span_test[-1])
-    ax2.set_ylim(-1, 10)
+    ax2.set_ylim(0, 1)
     ax3.set_xlim(-2, 2)
     ax3.set_ylim(-2, 2)
     ax.set_xlabel('x [m]')
@@ -446,7 +487,7 @@ if __name__ == '__main__':
         line.set_data(x_coord_test[0], q_traj[0, :, i])
         line2.set_data(x_coord_test[0], p_traj[0, :, i])
         line3.set_data(t_span_test[0:i], H_traj[0:i])
-        line4.set_data(t_span_test, H_exact_test*np.ones(len(t_span_test)))
+        line4.set_data(t_span_test, H_exact_test[0]*np.ones(len(t_span_test)))
         line5.set_data(q_traj[0, 5, 0:i], p_traj[0, 5, 0:i])
         return line, line2, line3, line4, line5
 
