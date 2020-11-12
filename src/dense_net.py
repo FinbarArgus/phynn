@@ -64,12 +64,16 @@ class DenseNet(nn.Module):
                                 drop_rate=drop_rate, batch_norm=batch_norm)
             self.add_module('denseblock{}'.format(i), block)
             if i != len(layers_per_block) - 1:
-
-                pass
+                self.add_module('linTrans{}'.format(i), nn.Linear(num_neurons, neurons_per_blocklayer[i+1]))
+                self.add_module('tanhTrans{}'.format(i), nn.Tanh())
+                if batch_norm:
+                    self.add_module('batchTrans{}'.format(i), nn.BatchNorm1d(neurons_per_blocklayer[i+1]))
+                self.add_module('dropTrans{}'.format(i), nn.Dropout(drop_rate))
 
         # Final layer
         self.add_module('linF', nn.Linear(neurons_per_blocklayer[-1], num_output))
-        self.add_module('softplus', nn.Softplus())
+        # TODO I have temporarily disabled softplus
+        # self.add_module('softplus', nn.Softplus())
 
     def forward(self, input):
         # TODO this might not work or might not be the most efficient option
