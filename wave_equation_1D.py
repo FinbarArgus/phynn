@@ -83,15 +83,13 @@ class Learner(pl.LightningModule):
         two networks. Then update them accordingly.
         This is soft parameter sharing
         """
-        # TODO temporarily don't do this
-        return
-#        self.weight_bias_loss = self.calculate_weight_loss()
+        self.weight_bias_loss = self.calculate_weight_loss()
 
         # backward prop to get gradients on weights for the parameter sharing
-#        self.weight_bias_loss.backward(retain_graph=True)
+        self.weight_bias_loss.backward(retain_graph=True)
         # step the weights forward according to the gradients from the above back prop
-#        self.second_opt.step()
-#        self.second_opt.zero_grad()
+        self.second_opt.step()
+        self.second_opt.zero_grad()
 
 
     def training_step(self, batch, batch_idx):
@@ -173,7 +171,8 @@ class Learner(pl.LightningModule):
         loss = loss_main + loss_grads + loss_H_const # + loss_nonZero_H
         logs = {'train_loss': loss, 'loss_main': loss_main,
                 'loss_grads': loss_grads, 'loss_H':loss_H_const,
-                'loss_weights': self.weight_bias_loss, 'H learning rate': self.second_opt.param_groups[0]['lr']}
+                'loss_weights': self.weight_bias_loss, 'H learning rate': self.second_opt.param_groups[0]['lr'],
+                'main_learning_rate': self.main_opt.param_groups[0]['lr']}
 
         #if epoch is a multiple of specified number then save the model
         if self.current_epoch != 0 and self.current_epoch%self.epoch_save == 0 and batch_idx == 0:
@@ -185,7 +184,7 @@ class Learner(pl.LightningModule):
                 'loss': loss,
                 }, self.save_path)
             # 'optimizer_state_dict': optimizer.state_dict(),
-        adaptive_lr_H = False
+        adaptive_lr_H = True
         adaptive_lr_main = True
         # set up lr scheduler on first epoch
         if self.current_epoch == 0 and batch_idx == 0:
@@ -195,17 +194,20 @@ class Learner(pl.LightningModule):
             self.scheduler_main = torch.optim.lr_scheduler.MultiplicativeLR(self.main_opt, lr_lambda=lmda_lr_main)
         # If epoch is a multiple of 300, increase the learning rate for H conservation
         if adaptive_lr_H and self.current_epoch != 0 and \
-                self.current_epoch % 100 == 0 and batch_idx == 0 and self.second_opt.param_groups[0]['lr'] < 0.1:
+                self.current_epoch % 10 == 0 and batch_idx == 0 and self.second_opt.param_groups[0]['lr'] < 0.05:
             self.scheduler_H.step()
+        if adaptive_lr_main and self.current_epoch == 3 and batch_idx == 0:
+            # reduce lr after 3 epochs, once the main loss has reduced below approx 1.6, where it gets stuck with small lrs
+            self.scheduler_main.step()
         if adaptive_lr_main and self.current_epoch != 0 and \
-                self.current_epoch % 10 == 0 and batch_idx == 0 and self.main_opt.param_groups[0]['lr'] > 0.00001:
+                self.current_epoch % 5 == 0 and batch_idx == 0 and self.main_opt.param_groups[0]['lr'] > 0.00001:
             self.scheduler_main.step()
 
         return {'loss': loss, 'log': logs}
 
     def configure_optimizers(self):
-        self.main_opt = torch.optim.Adam(self.model.parameters(), lr=0.002, weight_decay=0.01)  # lr= 0.0005 was good for loss_H_const
-        self.second_opt = torch.optim.SGD(self.model.parameters(), lr=0.00001) #lr=0.005)
+        self.main_opt = torch.optim.Adam(self.model.parameters(), lr=0.004, weight_decay=0.01)  # lr= 0.0005 was good for loss_H_const
+        self.second_opt = torch.optim.SGD(self.model.parameters(), lr=0.005) #lr=0.005)
         return self.main_opt
                                                                                       # lr= 0.005 was good for loss_main
 
@@ -247,7 +249,7 @@ def separable_hnn(num_points, train_wHmodel=True, input_h_s=None, input_model=No
         learn_sep = Learner(model, train_wHmodel=train_wHmodel, num_boundary=num_boundary,
                             save_path=save_path, epoch_save=epoch_save, dt=dt)
         logger = TensorBoardLogger('separable_logs')
-        trainer_sep = pl.Trainer(min_epochs=201, max_epochs=201, logger=logger, gpus=1)
+        trainer_sep = pl.Trainer(min_epochs=41, max_epochs=41, logger=logger, gpus=1)
         # step the weights forward according to the gradients from the above back prop
         trainer_sep.fit(learn_sep)
 
@@ -311,7 +313,7 @@ if __name__ == '__main__':
     dt_train = 0.01
 
     # Testing conditions
-    num_test = 10
+    num_test = batch_size # this needs to be done for accurate testing with batch norm
     x_coord_test = torch.zeros(num_test, num_train_xCoords).to(device)
     x_coord_test[:, num_boundary:-1*num_boundary] = torch.rand(num_test, num_train_xCoords - num_boundary*2).sort()[0]
     # overwrite first entry to be uniform
@@ -320,6 +322,8 @@ if __name__ == '__main__':
     x_coord_test[:, -1*num_boundary:] = 1.0
     q_test = torch.zeros(num_test, num_train_xCoords).to(device)
     p_test = torch.zeros(num_test, num_train_xCoords).to(device)
+    dq_dx_test = torch.zeros(num_test, num_train_xCoords).to('cpu')
+    dp_dx_test = torch.zeros(num_test, num_train_xCoords).to('cpu')
     H_exact_test = torch.zeros(num_test)
 
     # first entry is uniform with 0.5 amplitude
@@ -330,6 +334,11 @@ if __name__ == '__main__':
                               torch.cos(np.pi * x_coord_test[test_idx, :]).to(device)
         p_test[test_idx, :] = qp_normalise*amplitude_p_test*np.pi * \
                               torch.sin(np.pi * x_coord_test[test_idx, :]).to(device)
+        # The below are only used for testing
+        dq_dx_test[test_idx, :] = -1 * qp_normalise * amplitude_q_test * np.pi ** 2 * \
+                              torch.sin(np.pi * x_coord_test[test_idx, :])
+        dp_dx_test[test_idx, :] = qp_normalise * amplitude_p_test * np.pi ** 2 * \
+                              torch.cos(np.pi * x_coord_test[test_idx, :])
         # This is the exact hamiltonian calculated by hand
         # In future will have to calculate a general hamiltonian for different frequencies
         H_exact_test[test_idx] = H_normalise*0.5*(amplitude_q_test**2*np.pi**2 + amplitude_p_test**2*np.pi**2)
@@ -337,7 +346,7 @@ if __name__ == '__main__':
         amplitude_q_test = 2*np.random.rand(1)[0]-1
         amplitude_p_test = 2*np.random.rand(1)[0]-1
 
-    t_span_test = torch.linspace(0, 0.3, 60).to(device)
+    t_span_test = torch.linspace(0, 3.0, 600).to(device)
 
 
     # Wrap in for loop and change inputs to the stepped forward p's and q's, TODO currently for loop isn't used
@@ -350,14 +359,12 @@ if __name__ == '__main__':
         if tStep == 0: # tStep is only zero currently because we aren't training through time steps
             # load model if required
             if load_model:
-                separable, separable_model = separable_hnn(num_train_xCoords, train_wHmodel=train_wHmodel,
+                separable_temp, separable_model = separable_hnn(num_train_xCoords, train_wHmodel=train_wHmodel,
                                                            train=False)
                 # optimizer = TheOptimizerClass(*args, **kwargs)
 
                 checkpoint = torch.load(save_path)
                 separable_model.load_state_dict(checkpoint['model_state_dict'])
-                separable = separable_model.de_function.func
-                separable_H = separable_model.de_function.funcH
                 # optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
                 epoch = checkpoint['epoch']
                 loss = checkpoint['loss']
@@ -365,18 +372,25 @@ if __name__ == '__main__':
                 print('loaded model at epoch {} from {}'.format(epoch, save_path))
 
                 if do_train:
+                    separable_temp = separable_model.de_function.func
+                    separable_H_temp = separable_model.de_function.funcH
                     _, separable_model = separable_hnn(num_train_xCoords, train_wHmodel=train_wHmodel,
-                                                               input_h_s=separable, input_model=separable_model,
+                                                               input_h_s=separable_temp, input_model=separable_model,
                                                                save_path=save_path, epoch_save=epoch_save, dt=dt_train)
                     separable_model.eval()
                     # access model for HNN with analytic equation loss (separable) and HNN with Hamiltonian loss (separable_H)
-                    separable = separable_model.de_function.func.to(device)
-                    separable_H = separable_model.de_function.funcH.to(device)
+                    separable = separable_model.de_function.func
+                    separable_H = separable_model.de_function.funcH
                 else:
                     separable_model.eval()
+                    # The below might be needed to fix a bug in batchNorm, I don't understand the bug,
+                    # see https://discuss.pytorch.org/t/performance-highly-degraded-when-eval-is-activated-in-the-test-phase/3323/43
+                    for m in separable_model.modules():
+                        if isinstance(m, nn.BatchNorm2d):
+                            m.track_running_stats = False
                     # access model for HNN with analytic equation loss (separable) and HNN with Hamiltonian loss (separable_H)
-                    separable = separable_model.de_function.func.to(device)
-                    separable_H = separable_model.de_function.funcH.to(device)
+                    separable = separable_model.de_function.func
+                    separable_H = separable_model.de_function.funcH
 
             else:
                 if do_train:
@@ -422,18 +436,44 @@ if __name__ == '__main__':
     H_test_H = H_test_H.detach().cpu() # / H_normalise
     # H_exact_test = H_exact_test.detach().cpu() # / H_normalise
     #plt.plot(H_test, marker='x', linestyle='', color='r', label='H_test_an')
-    plt.plot(H_test_H, marker='x', linestyle='', color='b', label='H_test')
-    plt.plot(H_exact_test, marker='x', linestyle='', color='r', label='H_test_exact')
+    plt.plot(H_test_H[:10], marker='x', linestyle='', color='b', label='H_test')
+    plt.plot(H_exact_test[:10], marker='x', linestyle='', color='r', label='H_test_exact')
     ax.legend()
     H_compare_plot_name = 'H_comparison.png'
     plt.savefig(H_compare_plot_name )
 
     print('Hamiltonian comparison plotted in {}'.format(H_compare_plot_name))
 
+    print('Plotting time deriv comparison')
+    # The below plot tests the output Hamiltonian against exact hamiltonian for the test dataset and plots results
+    fig, ax = plt.subplots(1, 1)
+    # ax.set_ylim(0, 5)
+    ax.set_xlabel('test number')
+    ax.set_ylabel('q, p')
+
+    q_dot_test, p_dot_test, _ = separable(x_coord_test, q_test, p_test)
+    q_dot_test = q_dot_test.detach().cpu() # / H_normalise
+    p_dot_test = p_dot_test.detach().cpu() # / H_normalise
+    x_coord_test = x_coord_test.detach().cpu() # / H_normalise
+    # H_exact_test = H_exact_test.detach().cpu() # / H_normalise
+    #plt.plot(H_test, marker='x', linestyle='', color='r', label='H_test_an')
+    j = 0 # sample number of test data to plot
+    plt.plot(x_coord_test[j], q_dot_test[j], marker='x', linestyle='', color='b', label='q_dot_test')
+    plt.plot(x_coord_test[j], -dp_dx_test[j], marker='x', linestyle='', color='r', label='q_dot_exact')
+    plt.plot(x_coord_test[j], p_dot_test[j], marker='o', linestyle='', color='b', label='p_dot_test')
+    plt.plot(x_coord_test[j], -dq_dx_test[j], marker='o', linestyle='', color='r', label='p_dot_exact')
+    ax.legend()
+    pq_dot_compare_plot_name = 'pq_dot_comparison.png'
+    plt.savefig(pq_dot_compare_plot_name )
+
+    print('Time deriv comparison plotted in {}'.format(pq_dot_compare_plot_name))
+
+    exit()
+
     print('Calculating trajectory from first entry in the test dataset')
 
     # if this is true plot the HNN fit from hamiltonian loss, else plot the HNN fit from analytic equation loss
-    plot_wHmodel = False
+    plot_wHmodel = True
 
     if not plot_wHmodel:
         # set up time integrator that uses our separable HNN
@@ -466,7 +506,7 @@ if __name__ == '__main__':
     ax.set_xlim(0, 1)
     ax.set_ylim(-1, 1)
     ax2.set_xlim(0, t_span_test[-1])
-    ax2.set_ylim(0, 0.1)
+    ax2.set_ylim(0, 1.0)
     ax3.set_xlim(-1, 1)
     ax3.set_ylim(-1, 1)
     ax.set_xlabel('x [m]')

@@ -6,23 +6,28 @@ import numpy as np
 from typing import Any, List, Tuple
 
 class _DenseLayer(nn.Module):
-    def __init__(self, num_neurons, drop_rate=0.0, batch_norm=True):
+    def __init__(self, num_neurons, layerNum, drop_rate=0.0, batch_norm=True):
         super().__init__()
         self.batch_norm = batch_norm
 
-        self.add_module('lin0', nn.Linear(num_neurons, num_neurons))
-        self.add_module('tanh0', nn.Tanh())
+        self.add_module('lin{}'.format(layerNum), nn.Linear(num_neurons, num_neurons))
+        self.add_module('tanh{}'.format(layerNum), nn.Tanh())
         if batch_norm:
-            self.add_module('batch0', nn.BatchNorm1d(num_neurons))
-        self.add_module('drop0', nn.Dropout(drop_rate))
+            self.add_module('batch{}'.format(layerNum), nn.BatchNorm1d(num_neurons))
+        self.add_module('drop{}'.format(layerNum), nn.Dropout(drop_rate))
 
     def forward(self, input: Tensor) -> Tensor:
-        if self.batch_norm:
-            new_features = self.drop0(self.batch0(self.tanh0(self.lin0(input))))
-        else:
-            new_features = self.drop0(self.tanh0(self.lin0(input)))
+        # TODO this might not work or might not be the most efficient option
+        for module in self.children():
+            input = module(input)
+        return input
 
-        return new_features
+        ##if self.batch_norm:
+        ##    new_features = self.drop0(self.batch0(self.tanh0(self.lin0(input))))
+        ##else:
+        ##    new_features = self.drop0(self.tanh0(self.lin0(input)))
+
+        ##return new_features
 
         # bottleneck the incoming features into something that can go into the layer
 
@@ -33,7 +38,7 @@ class _DenseBlock(nn.ModuleDict):
     def __init__(self, num_layers, neurons_per_layer, drop_rate=0.0, batch_norm=True):
         super().__init__()
         for i in range(num_layers):
-            layer = _DenseLayer(neurons_per_layer, drop_rate=drop_rate, batch_norm=batch_norm)
+            layer = _DenseLayer(neurons_per_layer, i, drop_rate=drop_rate, batch_norm=batch_norm)
 
             self.add_module('denselayer{}'.format(i), layer)
 
@@ -52,11 +57,11 @@ class DenseNet(nn.Module):
         super().__init__()
 
         # First linear layer
-        self.add_module('lin0', nn.Linear(num_input, neurons_per_blocklayer[0]))
-        self.add_module('tanh0', nn.Tanh())
+        self.add_module('linInp', nn.Linear(num_input, neurons_per_blocklayer[0]))
+        self.add_module('tanhInp', nn.Tanh())
         if batch_norm:
-            self.add_module('batch0', nn.BatchNorm1d(neurons_per_blocklayer[0]))
-        self.add_module('drop0', nn.Dropout(drop_rate))
+            self.add_module('batchInp', nn.BatchNorm1d(neurons_per_blocklayer[0]))
+        self.add_module('dropInp', nn.Dropout(drop_rate))
 
         # Dense blocks
         for i, (num_layers, num_neurons) in enumerate(zip(layers_per_block, neurons_per_blocklayer)):
@@ -72,8 +77,7 @@ class DenseNet(nn.Module):
 
         # Final layer
         self.add_module('linF', nn.Linear(neurons_per_blocklayer[-1], num_output))
-        # TODO I have temporarily disabled softplus
-        # self.add_module('softplus', nn.Softplus())
+        self.add_module('softplus', nn.Softplus())
 
     def forward(self, input):
         # TODO this might not work or might not be the most efficient option
