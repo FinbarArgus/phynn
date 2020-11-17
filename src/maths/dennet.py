@@ -13,14 +13,14 @@ class DENNet(pl.LightningModule):
     """
 
     def __init__(self, func: nn.Module, order=1, sensitivity='autograd', s_span=torch.linspace(0, 1, 2), solver='rk4',
-                 atol=1e-4, rtol=1e-4, case='springmass'):
+                 atol=1e-4, rtol=1e-4, case='springmass', train_wHmodel=False):
         super().__init__()
 
         # have an if for DiffEq of PDEeq
         if case == 'springmass':
             self.de_function = DiffEq(func, order)
         elif case == '1DWave':
-            self.de_function = Diffeq1DWave(func, order)
+            self.de_function = Diffeq1DWave(func, train_wHmodel=train_wHmodel, order=order)
         else:
             print('case named {} is not applied'.format(case))
 

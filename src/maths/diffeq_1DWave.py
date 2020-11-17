@@ -8,10 +8,11 @@ class Diffeq1DWave(nn.Module):
 
     """
 
-    def __init__(self, func, order=1):
+    def __init__(self, func, train_wHmodel=False, order=1):
         super().__init__()
         self.func = func
-        self.funcH = copy.deepcopy(func)
+        if train_wHmodel:
+            self.funcH = copy.deepcopy(func)
         self.nfe = 0.  # number of function evaluations.
         self.order = order
         self._intloss = None
