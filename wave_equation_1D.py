@@ -63,8 +63,14 @@ class Learner(pl.LightningModule):
         return -dp_dx, -dq_dx
 
     @staticmethod
-    def add_gaussian_noise(input, mean, stddev):
-        noise = input.data.new(input.size()).normal_(mean, stddev)
+    def add_gaussian_noise(input, mean, stddev, proportional=True):
+        if proportional:
+            # scale the noise depending on the size of the input row
+            scale, _ = torch.max(torch.abs(input), dim=1)
+            noise = input.data.new(input.size()).normal_(mean, stddev)
+            noise = scale.unsqueeze(1) * noise
+        else:
+            noise = input.data.new(input.size()).normal_(mean, stddev)
         return input + noise
 
     def calculate_weight_loss(self):
@@ -99,17 +105,20 @@ class Learner(pl.LightningModule):
 
         # Note: training with gradients slows down training to a crawl
         train_wgradApprox = False
-        train_wHstep = False
+        train_wHstep = True
         train_wH_exact = True
 
         # get input data and add noise
         x = batch[0]
-        q = self.add_gaussian_noise(batch[1], 0.0, 0.1) # 0.05)
-        p = self.add_gaussian_noise(batch[2], 0.0, 0.1) # 0.05)
-        dq_dx = self.add_gaussian_noise(batch[3], 0.0, 0.1) # 0.05)
-        dp_dx =  self.add_gaussian_noise(batch[4], 0.0, 0.1) # 0.05)
+        q = self.add_gaussian_noise(batch[1], 0.0, 0.05, proportional=False) # 0.05)
+        p = self.add_gaussian_noise(batch[2], 0.0, 0.05, proportional=False) # 0.05)
+        dq_dx = batch[3]
+        dp_dx = batch[4]
+        #dq_dx = self.add_gaussian_noise(batch[3], 0.0, 0.1) # 0.05)
+        #dp_dx =  self.add_gaussian_noise(batch[4], 0.0, 0.1) # 0.05)
         if batch_size > 4:
-            H_exact = self.add_gaussian_noise(batch[5], 0.0, 0.05) # 0.01)
+            # H_exact = self.add_gaussian_noise(batch[5], 0.0, 0.05) # 0.01)
+            H_exact = batch[5]
 
 
         # Calculate y_hat = (q_dot_hat, p_dot_hat) from the gradient of the HNN
@@ -130,14 +139,16 @@ class Learner(pl.LightningModule):
         loss_grads = torch.tensor(0.).to(x)
         loss_H_const = torch.tensor(0.).to(x)
         # loss_nonZero_H = torch.tensor(0.).to(x)
-        grad_scale = 0.000005
+        if self.current_epoch > 15:
+            grad_scale = 0.00000005
+        else:
+            grad_scale = 0.0
         if train_wHmodel:
             H_train_scale = 5.0
             H_train_scale2 = 5.0
         else:
-            H_train_scale = 2.0
-            H_train_scale2 = 2.0
-
+            H_train_scale = 1.0
+            H_train_scale2 = 1.0
 
         if train_wgradApprox:
             q_dot_diff_approx = ((q_dot_hat[:, self.num_boundary + 1:-self.num_boundary] -
@@ -155,7 +166,6 @@ class Learner(pl.LightningModule):
             if train_wHmodel:
                 if train_wHstep:
                     time_integrator = TimeIntegrator(self.model.de_function.funcH).to(device)
-                    # TODO should i include noise here?
                     q_new, p_new, H_old = time_integrator.sv_step(x, q, p, self.dt)
                     H_new = self.model.de_function.funcH.H(torch.cat([x, q_new, p_new], dim=1))
 
@@ -174,7 +184,6 @@ class Learner(pl.LightningModule):
                 time_integrator = TimeIntegrator(self.model.de_function.func).to(device)
             else:
                 time_integrator = TimeIntegrator(self.model.de_function.funcH).to(device)
-            # TODO should i include noise here?
             q_new, p_new, H_old = time_integrator.sv_step(x, q, p, self.dt)
             H_new = self.model.de_function.func.H(torch.cat([x, q_new, p_new], dim=1))
             loss_H_const += H_train_scale*((H_new - H_old)**2).mean()
@@ -188,6 +197,12 @@ class Learner(pl.LightningModule):
                 'loss_weights': self.weight_bias_loss, 'H learning rate': self.second_opt.param_groups[0]['lr'],
                 'main_learning_rate': self.main_opt.param_groups[0]['lr']}
 
+        # If epoch is a multiple of validate_epoch then use test data to validate our accuracy
+        validate_epoch = 10
+        if self.current_epoch != 0 and self.current_epoch % validate_epoch == 0 and batch_idx == 0:
+            # TODO create validation here to check whether we are fitting the test data (without noise) well
+            pass
+
         #if epoch is a multiple of specified number then save the model
         if self.current_epoch != 0 and self.current_epoch%self.epoch_save == 0 and batch_idx == 0:
             print(' Saving model for epoch number {}, in {}'.format(self.current_epoch,
@@ -198,6 +213,8 @@ class Learner(pl.LightningModule):
                 'loss': loss,
                 }, self.save_path)
             # 'optimizer_state_dict': optimizer.state_dict(),
+
+        # learning rate adaptation
         if train_wHmodel:
             adaptive_lr_H = True
         else:
@@ -210,7 +227,7 @@ class Learner(pl.LightningModule):
                 lmda_lr_H = lambda epoch: 2.0
                 self.scheduler_H = torch.optim.lr_scheduler.MultiplicativeLR(self.second_opt, lr_lambda=lmda_lr_H)
             if adaptive_lr_main:
-                lmda_lr_main = lambda epoch: 0.1
+                lmda_lr_main = lambda epoch: 0.25
                 self.scheduler_main = torch.optim.lr_scheduler.MultiplicativeLR(self.main_opt, lr_lambda=lmda_lr_main)
         # If epoch is a multiple of 5, increase the learning rate for H conservation
         if adaptive_lr_H and self.current_epoch != 0 and \
@@ -220,13 +237,15 @@ class Learner(pl.LightningModule):
             # reduce lr after 3 epochs, once the main loss has reduced below approx 1.6, where it gets stuck with small lrs
             self.scheduler_main.step()
         if adaptive_lr_main and self.current_epoch != 0 and \
-                self.current_epoch % 20 == 0 and batch_idx == 0 and self.main_opt.param_groups[0]['lr'] > 0.00001:
+                self.current_epoch % 15 == 0 and batch_idx == 0 and self.main_opt.param_groups[0]['lr'] > 0.0000001:
             self.scheduler_main.step()
 
         return {'loss': loss, 'log': logs}
 
     def configure_optimizers(self):
-        self.main_opt = torch.optim.Adam(self.model.parameters(), lr=0.001, weight_decay=0.01)  # lr= 0.004 was good for loss_H_const with train_wHmodel
+        self.main_opt = torch.optim.Adam(self.model.parameters(), lr=0.003, weight_decay=0.01)
+        # try lr = 0.004 with 0.25 lmda_lr_main and refine after 20 then every 10 epochs
+        # lr= 0.004 was good for loss_H_const with train_wHmodel
         self.second_opt = torch.optim.SGD(self.model.parameters(), lr=0.01) #lr=0.005)
         return self.main_opt
                                                                                       # lr= 0.005 was good for loss_main
@@ -249,8 +268,7 @@ def separable_hnn(num_points, train_wHmodel=False, input_h_s=None, input_model=N
     else:
         # architecture = SimpleEncoder([3*num_points, 60, 60, 40, 20, 10, 1],
         #                               drop_rate=0.2, batch_norm=False).to(device)
-        architecture = DenseNet(3*num_points, 1, [10], [128], drop_rate=0.0, batch_norm=True).to(device)
-        # 6x128 worked okay above
+        architecture = DenseNet(3*num_points, 1, [8], [128], drop_rate=0.0, batch_norm=True).to(device)
         h_s = HNN1DWaveSeparable(architecture)
 
         # initialise weights
@@ -297,9 +315,9 @@ if __name__ == '__main__':
     epoch_save = 5
 
     # Training conditions
-    num_train_xCoords = 20
+    num_train_xCoords = 60
     num_tSteps_training = 1 # we only train for 1 time step for now
-    num_boundary = 2
+    num_boundary = 3
     num_datasets = 2**16
     batch_size = 2**9
     # Training initial conditions [q, p, dq/dx, dp/dx, x]
@@ -333,12 +351,14 @@ if __name__ == '__main__':
     # Training time step
     dt_train = 0.01
 
+    first_test_uniform = True
     # Testing conditions
     num_test = batch_size # this needs to be done for accurate testing with batch norm
     x_coord_test = torch.zeros(num_test, num_train_xCoords).to(device)
     x_coord_test[:, num_boundary:-1*num_boundary] = torch.rand(num_test, num_train_xCoords - num_boundary*2).sort()[0]
     # overwrite first entry to be uniform
-    x_coord_test[:1, num_boundary-1:-1*num_boundary+1] = torch.linspace(0, 1.0, num_train_xCoords-num_boundary*2+2)
+    if first_test_uniform:
+        x_coord_test[:1, num_boundary-1:-1*num_boundary+1] = torch.linspace(0, 1.0, num_train_xCoords-num_boundary*2+2)
     # set right boundary to 1
     x_coord_test[:, -1*num_boundary:] = 1.0
     q_test = torch.zeros(num_test, num_train_xCoords).to(device)
@@ -367,7 +387,9 @@ if __name__ == '__main__':
         amplitude_q_test = 2*np.random.rand(1)[0]-1
         amplitude_p_test = 2*np.random.rand(1)[0]-1
 
-    t_span_test = torch.linspace(0, 3.0, 600).to(device)
+    sim_time = 3.0
+    sim_steps = 300
+    t_span_test = torch.linspace(0, sim_time, sim_steps).to(device)
 
 
     # Wrap in for loop and change inputs to the stepped forward p's and q's, TODO currently for loop isn't used
@@ -397,7 +419,7 @@ if __name__ == '__main__':
                     _, separable_model = separable_hnn(num_train_xCoords, train_wHmodel=train_wHmodel,
                                                                input_h_s=separable_temp, input_model=separable_model,
                                                                save_path=save_path, epoch_save=epoch_save, dt=dt_train)
-                    separable_model.eval()
+                    # separable_model.eval()
                     # access model for HNN with analytic equation loss (separable) and HNN with Hamiltonian loss (separable_H)
                     separable = separable_model.de_function.func
                     if train_wHmodel:
@@ -418,7 +440,7 @@ if __name__ == '__main__':
                 if do_train:
                     _, separable_model = separable_hnn(num_train_xCoords, train_wHmodel=train_wHmodel,
                                                                save_path=save_path, epoch_save=epoch_save, dt=dt_train)
-                    separable_model.eval()
+                    # separable_model.eval()
                     # access model for HNN with analytic equation loss (separable) and HNN with Hamiltonian loss (separable_H)
                     separable = separable_model.de_function.func.to(device)
                     if train_wHmodel:
@@ -474,7 +496,7 @@ if __name__ == '__main__':
     # The below plot tests the output Hamiltonian against exact hamiltonian for the test dataset and plots results
     fig, ax = plt.subplots(1, 1)
     # ax.set_ylim(0, 5)
-    ax.set_xlabel('test number')
+    ax.set_xlabel('x')
     ax.set_ylabel('q_dot, p_dot')
 
     q_dot_test, p_dot_test, _ = separable(x_coord_test, q_test, p_test)
@@ -573,9 +595,9 @@ if __name__ == '__main__':
     anim = FuncAnimation(fig, animate, frames=len(t_span_test), init_func=init, blit=True)
     plot_save = True
     if plot_save:
-        writer = LoopingPillowWriter(fps=20)
+        writer = LoopingPillowWriter(fps=sim_steps // sim_time)
         # TODO change name for saved animation
-        anim.save('tanh_1d_wave_V6.gif', writer=writer)
+        anim.save('tanh_1d_wave_single_dense.gif', writer=writer)
 
     plt.show()
 
